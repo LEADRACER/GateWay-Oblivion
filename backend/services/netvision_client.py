@@ -42,12 +42,11 @@ class NetVisionClient:
         try:
             resp = await self._client.post(
                 urljoin(self.base_url, "/auth/token"),
-                data={
+                json={
                     "username": self.username,
                     "password": self.password,
-                    "grant_type": "password",
                 },
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                headers={"Content-Type": "application/json"},
             )
             if resp.status_code == 200:
                 data = resp.json()
@@ -83,11 +82,11 @@ class NetVisionClient:
             logger.warning("NetVision GET %s error: %s", path, e)
             return {}
 
-    async def _post(self, path: str, data: dict = None) -> dict:
+    async def _post(self, path: str, data: dict = None, params: dict = None) -> dict:
         headers = await self._headers()
         url = urljoin(self.base_url, path)
         try:
-            resp = await self._client.post(url, headers=headers, json=data)
+            resp = await self._client.post(url, headers=headers, json=data, params=params)
             if resp.status_code in (200, 201):
                 return resp.json()
             logger.warning("NetVision POST %s: %d %s", path, resp.status_code, resp.text[:200])
@@ -123,7 +122,8 @@ class NetVisionClient:
         params = {"profile": profile}
         if target:
             params["target"] = target
-        return await self._post("/scan", params)
+        # NetVision's /scan reads query parameters (JSON body is ignored).
+        return await self._post("/scan", params=params)
 
     async def stop_scan(self) -> dict:
         """Stop the active scan."""

@@ -861,7 +861,7 @@ async def overview_dashboard():
     netvision = {"name": "NetVision", "status": "offline", "type": "recon"}
     if nv_client is not None:
         try:
-            nv_health = await nv_client.get("health")
+            nv_health = await nv_client.health()
             netvision["status"] = nv_health.get("status", "offline") if nv_health else "offline"
             netvision["version"] = nv_health.get("version") if nv_health else None
         except Exception:

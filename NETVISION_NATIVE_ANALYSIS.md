@@ -172,3 +172,10 @@ is a separate app, duplicating dashboard concerns with Oblivion.
 **Bottom line:** NetVision is production-grade and should be treated as Oblivion's *native sensor
 fabric*, not just another adapter. Fixing F1–F3 is required before any real pipeline run can be
 trusted; P1–P2 turns it into a true first-class component feeding the canonical timeline.
+
+### 2026-11-22 addendum — implemented
+F1–F3 are fixed: scan params now travel as query parameters, `/api/overview` calls `health()`,
+and the adapter normalizes NetVision's `ok` → `available`. JWT auth now uses a JSON body and
+`sonar_scan` / `sonar_sensors` expose NetVision's modular discovery (including the privileged
+bettercap bridge) through `/api/tools/netvision/execute`. Verified live: auth succeeds, scans
+enqueue with the requested target, and the WS bridge connects.

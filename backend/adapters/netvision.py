@@ -13,6 +13,7 @@ class NetVisionAdapter(ToolAdapter):
     name = "netvision"
 
     def __init__(self, base_url="http://localhost:8000", username="admin", password="netvision"):
+        self._base_url = base_url
         self.client = NetVisionClient(base_url, username, password)
 
     async def health(self) -> dict:
@@ -20,12 +21,16 @@ class NetVisionAdapter(ToolAdapter):
         status = h.get("status") if isinstance(h, dict) else None
         if not h or not status:
             status = "unavailable"
+        # NetVision reports "ok"; Oblivion's tool registry/UI expect "available".
+        if status in ("ok", "ready", "healthy", "alive"):
+            status = "available"
         out: dict = dict(h) if isinstance(h, dict) else {}
         out.setdefault("name", self.name)
         out.setdefault("status", status)
-        out["available"] = status != "unavailable"
+        out["status"] = status
+        out["available"] = status == "available"
         out["connected"] = False
-        out["base_url"] = getattr(self.client, "base_url", None) or self.base_url
+        out["base_url"] = getattr(self.client, "base_url", None) or self._base_url
         return out
 
     async def connect(self) -> bool:
@@ -53,7 +58,11 @@ class NetVisionAdapter(ToolAdapter):
     async def execute(self, action: str, params=None) -> dict:
         params = params or {}
         if action == "trigger_scan":
-            return await self.client.trigger_scan(params.get("target"), params.get("profile", "quick"))
+            target = params.get("target")
+            profile = params.get("profile", "discovery")
+            # NetVision v5 uses these ScanProfile names; earlier "quick" was invalid.
+            profile = {"quick": "discovery", "security": "vuln"}.get(profile, profile)
+            return await self.client.trigger_scan(target, profile)
         if action == "stop_scan":
             return await self.client.stop_scan()
         if action == "sonar_scan":

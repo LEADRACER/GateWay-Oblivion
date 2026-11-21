@@ -25,6 +25,7 @@ class NetVisionWSBridge:
         self._listeners: list = []
         self._connected = False
         self._last_event: Optional[dict] = None
+        self.on_event = None  # optional async callback -> unified event bus
 
     @property
     def is_connected(self) -> bool:
@@ -69,6 +70,11 @@ class NetVisionWSBridge:
                         try:
                             data = json.loads(raw)
                             self._last_event = data
+                            if self.on_event is not None:
+                                try:
+                                    await self.on_event(data)
+                                except Exception as exc:  # noqa: BLE001
+                                    logger.warning("NetVision event callback failed: %s", exc)
                             await self._forward_to_listeners(data)
                         except json.JSONDecodeError:
                             pass

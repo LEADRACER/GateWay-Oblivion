@@ -10,6 +10,7 @@ import {
   useReconVulns,
   useTriggerScan,
   useStopScan,
+  type NetVisionDevice,
 } from '@/hooks/useRecon';
 import { StatCard, Badge } from '@/components/ui/primitives';
 
@@ -22,7 +23,7 @@ export default function ReconPage() {
   const stopScan = useStopScan();
 
   const [scanTarget, setScanTarget] = useState('');
-  const [scanProfile, setScanProfile] = useState('quick');
+  const [scanProfile, setScanProfile] = useState('discovery');
   const [searchQuery, setSearchQuery] = useState('');
 
   const netvisionOnline = summary?.netvision_reachable ?? false;
@@ -85,6 +86,7 @@ export default function ReconPage() {
             onChange={(e) => setScanProfile(e.target.value)}
             className="bg-bg border border-border px-3 py-2 font-mono text-xs text-text focus:outline-none"
           >
+            <option value="discovery">Discovery</option>
             <option value="quick">Quick</option>
             <option value="deep">Deep</option>
             <option value="full">Full</option>
@@ -271,7 +273,7 @@ function ScanStatusBadge({ status }: { status: string }) {
   );
 }
 
-function DeviceRow({ device }: { device: any }) {
+function DeviceRow({ device }: { device: NetVisionDevice }) {
   const portCount = device.ports?.length ?? 0;
   const healthStatus = device.health?.status ?? 'unknown';
   const hasVulns = device.vulns_detected;

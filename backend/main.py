@@ -313,6 +313,24 @@ async def lifespan(app: FastAPI):
     nv_client = NetVisionClient()
     nv_ws_bridge = NetVisionWSBridge()
 
+    async def _netvision_event(data: dict):
+        """Normalize NetVision's typed WebSocket events onto Oblivion's bus."""
+        etype = data.get("event") or data.get("type") or "netvision.event"
+        severity = "info"
+        if etype in ("health.alert", "capture.alert", "rogue.ap", "alert"):
+            severity = "warning"
+        elif etype in ("vuln.found", "vulnerability"):
+            severity = "high"
+        await event_bus.emit(
+            source_tool="netvision",
+            event_type=f"netvision.{etype}",
+            payload=data,
+            severity=severity,
+            title=f"NetVision {str(etype).replace('.', ' ')}",
+        )
+
+    nv_ws_bridge.on_event = _netvision_event
+
     # Log NetVision connection status
     try:
         health = await nv_client.health()
@@ -1339,6 +1357,81 @@ async def cancel_pipeline_run(run_id: str):
     if not run:
         raise HTTPException(404, "Pipeline run not found")
     return {"run_id": run.id, "status": run.status}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Native NetVision Control & Metrics API
+# ═══════════════════════════════════════════════════════════════════
+
+@app.get("/api/netvision/metrics")
+async def netvision_metrics(raw: bool = Query(False)):
+    """Structured Prometheus metrics scraped from NetVision (/metrics)."""
+    adapter = get_adapter("netvision")
+    if not adapter:
+        raise HTTPException(404, "NetVision adapter unavailable")
+    return await adapter.execute("metrics", {"raw": raw})
+
+
+@app.get("/api/netvision/capabilities")
+async def netvision_capabilities():
+    """Full status of every controllable NetVision subsystem."""
+    adapter = get_adapter("netvision")
+    if not adapter:
+        raise HTTPException(404, "NetVision adapter unavailable")
+    result = {
+        "adapter_actions": adapter.get_actions(),
+        "reachable": False,
+        "health": await adapter.health(),
+    }
+    result["reachable"] = bool(result["health"].get("available"))
+    for action in (
+        "health_ready", "config", "sonar_sensors", "sonar_status",
+        "bettercap_status", "capture_status", "scan_queue",
+    ):
+        try:
+            value = await adapter.execute(action)
+            result[action] = value
+        except Exception as exc:  # noqa: BLE001
+            result[action] = {"error": str(exc)}
+    return result
+
+
+@app.get("/api/netvision/events")
+async def netvision_events(limit: int = Query(50)):
+    """Normalized NetVision events from the unified bus + latest raw WS event."""
+    events = event_bus.list_events(limit=limit, source_tool="netvision")
+    return {
+        "events": [e.model_dump() for e in events],
+        "last_websocket_event": nv_ws_bridge.last_event if nv_ws_bridge else None,
+    }
+
+
+@app.get("/api/netvision/control")
+async def netvision_controls():
+    adapter = get_adapter("netvision")
+    return {"actions": adapter.get_actions() if adapter else []}
+
+
+@app.post("/api/netvision/control/{action}")
+async def netvision_control(action: str, params: dict = {}):
+    """Generic control surface for any NetVision adapter action."""
+    adapter = get_adapter("netvision")
+    if not adapter:
+        raise HTTPException(404, "NetVision adapter unavailable")
+    try:
+        result = await adapter.execute(action, params)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, str(exc))
+    await event_bus.emit(
+        source_tool="netvision",
+        event_type=f"netvision.control.{action}",
+        payload={"action": action, "params": params, "result": result},
+        severity="info",
+        title=f"NetVision {action.replace('_', ' ')}",
+    )
+    return {"action": action, "result": result}
 
 
 # ═══════════════════════════════════════════════════════════════════

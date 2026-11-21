@@ -24,6 +24,11 @@ const navItems: NavItem[] = [
     icon: <SatelliteIcon />,
   },
   {
+    label: 'NetVision',
+    href: '/netvision',
+    icon: <RadarIcon />,
+  },
+  {
     label: 'Targets',
     href: '/targets',
     icon: <CrosshairsIcon />,

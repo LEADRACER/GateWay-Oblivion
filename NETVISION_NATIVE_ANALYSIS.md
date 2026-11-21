@@ -179,3 +179,13 @@ and the adapter normalizes NetVision's `ok` → `available`. JWT auth now uses a
 `sonar_scan` / `sonar_sensors` expose NetVision's modular discovery (including the privileged
 bettercap bridge) through `/api/tools/netvision/execute`. Verified live: auth succeeds, scans
 enqueue with the requested target, and the WS bridge connects.
+
+### 2026-11-22 — Full native re-integration
+NetVision is now a first-class subsystem with **41 controllable actions** and a dedicated control
+plane: `GET /api/netvision/metrics` (parsed Prometheus), `GET /api/netvision/capabilities`,
+`GET /api/netvision/events`, `GET /api/netvision/control`, `POST /api/netvision/control/{action}`.
+Typed NetVision WebSocket events are normalized onto the canonical event bus as
+`netvision.discovery.host`, `netvision.scan.*`, `netvision.health.alert`, etc. The dashboard
+`/netvision` page exposes metric cards, subsystem readiness, and one-click sonar/bettercap/capture
+controls. Verified live with the root bridge active: metrics reachable, 9 sensors, bettercap
+LIVE, sonar runs and event fan-out working.

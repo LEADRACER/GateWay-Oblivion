@@ -5,16 +5,61 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     from services.netvision_client import NetVisionClient
+    from services.netvision_metrics import NetVisionMetricsCollector
 except ImportError:
     from backend.services.netvision_client import NetVisionClient
+    from backend.services.netvision_metrics import NetVisionMetricsCollector
 
 
 class NetVisionAdapter(ToolAdapter):
     name = "netvision"
 
+    # Every controllable NetVision surface exposed through Oblivion's tool bus.
+    ACTION_METHODS = {
+        "scan_status": "scan_status",
+        "scan_queue": "scan_queue",
+        "scan_history": "scan_history",
+        "scan_diff": "scan_diff",
+        "scan_schedules": "scan_schedules",
+        "create_scan_schedule": "create_scan_schedule",
+        "delete_scan_schedule": "delete_scan_schedule",
+        "toggle_scan_schedule": "toggle_scan_schedule",
+        "sonar_sensors": "sonar_sensors",
+        "sonar_status": "discovery_status",
+        "sonar_results": "discovery_results",
+        "discovery_results": "discovery_results",
+        "bettercap_status": "bettercap_status",
+        "bettercap_start": "bettercap_start",
+        "bettercap_stop": "bettercap_stop",
+        "bettercap_hosts": "bettercap_hosts",
+        "bettercap_events": "bettercap_events",
+        "devices": "devices",
+        "vulnerabilities": "vulnerabilities",
+        "topology": "topology",
+        "correlation": "correlation",
+        "recon_summary": "recon_summary",
+        "health": "health",
+        "health_ready": "health_ready",
+        "health_live": "health_live",
+        "health_history": "health_history",
+        "audit_log": "audit_log",
+        "config": "config",
+        "capture_status": "capture_status",
+        "capture_start": "capture_start",
+        "capture_stop": "capture_stop",
+        "capture_analysis_summary": "capture_analysis_summary",
+        "capture_anomalies": "capture_anomalies",
+        "rogue_scan": "rogue_scan",
+        "rogue_events": "rogue_events",
+        "top_talkers": "top_talkers",
+        "probe": "probe",
+        "correlate_vulns": "correlate_vulns",
+    }
+
     def __init__(self, base_url="http://localhost:8000", username="admin", password="netvision"):
         self._base_url = base_url
         self.client = NetVisionClient(base_url, username, password)
+        self.metrics = NetVisionMetricsCollector(self.client)
 
     async def health(self) -> dict:
         h = await self.client.health()
@@ -26,11 +71,12 @@ class NetVisionAdapter(ToolAdapter):
             status = "available"
         out: dict = dict(h) if isinstance(h, dict) else {}
         out.setdefault("name", self.name)
-        out.setdefault("status", status)
         out["status"] = status
         out["available"] = status == "available"
         out["connected"] = False
         out["base_url"] = getattr(self.client, "base_url", None) or self._base_url
+        # Surface native control capabilities in tool health.
+        out["capabilities"] = self.get_actions()
         return out
 
     async def connect(self) -> bool:
@@ -44,15 +90,8 @@ class NetVisionAdapter(ToolAdapter):
 
     def get_actions(self) -> list:
         return [
-            "trigger_scan",
-            "stop_scan",
-            "sonar_scan",
-            "sonar_sensors",
-            "devices",
-            "vulnerabilities",
-            "topology",
-            "correlation",
-            "recon_summary",
+            "trigger_scan", "stop_scan", "sonar_scan", "metrics",
+            *self.ACTION_METHODS.keys(),
         ]
 
     async def execute(self, action: str, params=None) -> dict:
@@ -60,7 +99,6 @@ class NetVisionAdapter(ToolAdapter):
         if action == "trigger_scan":
             target = params.get("target")
             profile = params.get("profile", "discovery")
-            # NetVision v5 uses these ScanProfile names; earlier "quick" was invalid.
             profile = {"quick": "discovery", "security": "vuln"}.get(profile, profile)
             return await self.client.trigger_scan(target, profile)
         if action == "stop_scan":
@@ -71,17 +109,16 @@ class NetVisionAdapter(ToolAdapter):
                 mode=params.get("mode", "sonar"),
                 duration=int(params.get("duration", 10)),
             )
-        if action == "sonar_sensors":
-            return await self.client.sonar_sensors()
-        if action == "devices":
-            return {"devices": await self.client.devices()}
-        if action == "vulnerabilities":
-            return {"vulnerabilities": await self.client.vulnerabilities()}
-        if action == "topology":
-            return await self.client.topology()
-        if action == "recon_summary":
-            return await self.client.recon_summary()
-        raise ValueError(f"Unknown action: {action}")
+        if action == "metrics":
+            return await self.metrics.snapshot(raw=bool(params.get("raw", False)))
+        if action in self.ACTION_METHODS:
+            method = getattr(self.client, self.ACTION_METHODS[action])
+            # Pass only parameters the target method actually accepts.
+            import inspect
+            accepted = inspect.signature(method).parameters
+            kwargs = {k: v for k, v in params.items() if k in accepted}
+            return await method(**kwargs)
+        raise ValueError(f"Unknown NetVision action: {action}")
 
     def normalize_result(self, raw):
         return {"source": "netvision", "raw": raw}

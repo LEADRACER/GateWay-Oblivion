@@ -98,6 +98,29 @@ class NetVisionClient:
     async def close(self):
         await self._client.aclose()
 
+    async def _get_text(self, path: str) -> str:
+        """Fetch a plain-text endpoint (e.g. Prometheus /metrics)."""
+        headers = await self._headers()
+        try:
+            resp = await self._client.get(
+                urljoin(self.base_url, path), headers=headers, timeout=10.0
+            )
+            return resp.text if resp.status_code == 200 else ""
+        except Exception as exc:
+            logger.warning("NetVision GET %s error: %s", path, exc)
+            return ""
+
+    async def _delete(self, path: str) -> dict:
+        headers = await self._headers()
+        try:
+            resp = await self._client.delete(urljoin(self.base_url, path), headers=headers)
+            if resp.status_code in (200, 204):
+                return resp.json() if resp.content else {"ok": True}
+            logger.warning("NetVision DELETE %s: %d %s", path, resp.status_code, resp.text[:200])
+        except Exception as exc:
+            logger.warning("NetVision DELETE %s error: %s", path, exc)
+        return {}
+
     # ── Health & Status ──────────────────────────────────────────
 
     async def health(self) -> dict:
@@ -216,3 +239,101 @@ class NetVisionClient:
             "health_down": sum(1 for d in devs if d.get("health", {}).get("status") == "down"),
             "last_scan": scan_st.get("last_scan"),
         }
+
+    # ── Metrics & readiness ────────────────────────────────────────
+
+    async def metrics_raw(self) -> str:
+        return await self._get_text("/metrics")
+
+    async def health_ready(self) -> dict:
+        return await self._get("/health/ready")
+
+    async def health_live(self) -> dict:
+        return await self._get("/health/live")
+
+    async def health_history(self, limit: int = 50) -> list:
+        data = await self._get("/health/history", {"limit": limit})
+        if isinstance(data, list):
+            return data
+        return data.get("history", data.get("entries", [])) if isinstance(data, dict) else []
+
+    async def audit_log(self, limit: int = 100) -> list:
+        data = await self._get("/audit-log", {"limit": limit})
+        return data.get("entries", []) if isinstance(data, dict) else []
+
+    async def config(self) -> dict:
+        return await self._get("/api/config")
+
+    # ── Sonar / bettercap control ──────────────────────────────────
+
+    async def discovery_status(self) -> dict:
+        return await self._get("/api/discovery/status")
+
+    async def discovery_results(self, limit: int = 10) -> list:
+        data = await self._get("/api/discovery/results", {"limit": limit})
+        return data.get("runs", []) if isinstance(data, dict) else []
+
+    async def bettercap_status(self) -> dict:
+        return await self._get("/api/bettercap/status")
+
+    async def bettercap_start(self) -> dict:
+        return await self._post("/api/bettercap/start")
+
+    async def bettercap_stop(self) -> dict:
+        return await self._post("/api/bettercap/stop")
+
+    async def bettercap_hosts(self) -> list:
+        data = await self._get("/api/bettercap/hosts")
+        return data.get("hosts", []) if isinstance(data, dict) else []
+
+    async def bettercap_events(self, limit: int = 100) -> list:
+        data = await self._get("/api/bettercap/events", {"limit": limit})
+        return data.get("events", []) if isinstance(data, dict) else []
+
+    # ── Scan scheduling & diff ─────────────────────────────────────
+
+    async def scan_schedules(self) -> list:
+        data = await self._get("/scan/schedule")
+        return data.get("schedules", []) if isinstance(data, dict) else []
+
+    async def create_scan_schedule(self, target: str, profile: str, interval_minutes: int = 60) -> dict:
+        return await self._post("/scan/schedule", {
+            "target": target, "profile": profile, "interval_minutes": interval_minutes,
+        })
+
+    async def delete_scan_schedule(self, schedule_id: int) -> dict:
+        return await self._delete(f"/scan/schedule/{schedule_id}")
+
+    async def toggle_scan_schedule(self, schedule_id: int) -> dict:
+        return await self._post(f"/scan/schedule/{schedule_id}/toggle")
+
+    # ── Capture & probes ───────────────────────────────────────────
+
+    async def capture_start(self, duration: int = 30, bpf_filter: str = "") -> dict:
+        return await self._post("/capture/start-streaming", {
+            "duration": duration, "bpf_filter": bpf_filter,
+        })
+
+    async def capture_stop(self) -> dict:
+        return await self._post("/capture/stop-streaming")
+
+    async def capture_analysis_summary(self) -> dict:
+        return await self._get("/capture/analysis-summary")
+
+    async def capture_anomalies(self) -> list:
+        data = await self._get("/capture/anomalies")
+        return data.get("anomalies", []) if isinstance(data, dict) else []
+
+    async def rogue_scan(self) -> dict:
+        return await self._post("/capture/rogue-scan")
+
+    async def rogue_events(self) -> list:
+        data = await self._get("/capture/rogue-events")
+        return data.get("events", []) if isinstance(data, dict) else []
+
+    async def probe(self, ip: str) -> dict:
+        return await self._get(f"/probes/scan/{ip}")
+
+    async def correlate_vulns(self) -> dict:
+        return await self._post("/vulnerabilities/correlate")
+

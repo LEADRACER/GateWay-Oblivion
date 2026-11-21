@@ -5,6 +5,8 @@ GateWay:Oblivion — Tool Adapter Registry
 Owns the live instances of every tool adapter and aggregates health checks.
 """
 
+import asyncio
+import time
 from typing import Optional
 
 try:
@@ -26,6 +28,8 @@ except ImportError:
 class AdapterRegistry:
     def __init__(self):
         self.adapters: dict = {}
+        self._last_health: dict = {}
+        self._last_health_ts: float = 0.0
 
     def register(self, adapter: ToolAdapter) -> ToolAdapter:
         self.adapters[adapter.name] = adapter
@@ -37,14 +41,28 @@ class AdapterRegistry:
     def list(self) -> list:
         return list(self.adapters.keys())
 
-    async def health_all(self) -> dict:
-        results = {}
-        for name, adapter in self.adapters.items():
+    async def health_all(self, force: bool = False, ttl: float = 15.0) -> dict:
+        """Probe every adapter concurrently; reuse a short-lived cached snapshot."""
+        if not force and self._last_health and (time.monotonic() - self._last_health_ts) < ttl:
+            return dict(self._last_health)
+
+        async def probe(name: str, adapter: ToolAdapter):
             try:
-                results[name] = await adapter.health()
-            except Exception as e:  # noqa: BLE001
-                results[name] = {"name": name, "status": "error", "error": str(e)}
-        return results
+                return name, await adapter.health()
+            except Exception as exc:  # noqa: BLE001
+                return name, {
+                    "name": name,
+                    "status": "error",
+                    "available": False,
+                    "error": str(exc),
+                }
+
+        pairs = await asyncio.gather(
+            *(probe(name, adapter) for name, adapter in self.adapters.items())
+        )
+        self._last_health = dict(pairs)
+        self._last_health_ts = time.monotonic()
+        return dict(self._last_health)
 
 
 registry = AdapterRegistry()

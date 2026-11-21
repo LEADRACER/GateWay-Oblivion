@@ -283,6 +283,19 @@ canvas generate (12 nodes/5 edges), canvas add-node (validated), invalid-edge re
 rejection (HTTP 400), and event-bus fan-out of `obsidian.*` events.
 *Note:* runs in file mode (no desktop app/REST API plugin required); `OBSIDIAN_API_KEY`/`OBSIDIAN_API_HOST`
 are reported in status for optional REST API use.
+
+**Autonomic backend upgrade (2026-11-21): ✅ IMPLEMENTED & VERIFIED** — `backend/services/resilience.py`
+adds `TTLCache` (single-flight, bounded, hit-rate stats), `CircuitBreaker` (closed/open/half-open with
+adaptive recovery) and `HealthMonitor` (background concurrent probes, self-optimizing intervals,
+auto-reconnect, `tool.online|offline|recovered` events). Registry health probes now run concurrently with a
+15s cache; event bus fans out via `asyncio.gather`; pipeline runner executes independent DAG levels in
+parallel; God's Eye View reuses a pooled httpx client. New control plane: `GET /api/system/autonomy`,
+`POST /api/system/autonomy/recheck`, `POST /api/system/autonomy/recover/{tool}`,
+`DELETE /api/system/autonomy/cache`; `/api/tools/{tool}/execute` is breaker-protected and read-only
+actions are cached (`X-Cache: HIT|MISS`).
+*Live-verified:* tool transition events at startup, cache MISS→HIT with 50% hit rate, breaker opens after
+3 failures and rejects with HTTP 503, recheck/recover/cache-clear endpoints, and Full Recon pipeline
+still completes under the concurrent runner.
 | **5** | Safety & persistence: scope allowlist, audit log, credential vault, Supabase/Postgres migration | 2 wk | Hardened ops |
 
 ---

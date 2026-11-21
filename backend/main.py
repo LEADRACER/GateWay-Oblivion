@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -21,6 +21,7 @@ from services.vuln_service import vuln_store, VulnCreate, VulnPatch
 from services.operations_service import ops_store, ops_executor, OperationCreate, RUNBOOKS
 from services.intel_service import intel_store, ReportCreate
 from services.event_bus import event_bus
+from services.resilience import TTLCache, CircuitBreaker, HealthMonitor, CircuitOpen
 from models.canonical import CanonicalEvent, canonical_event
 from adapters import (
     AdapterRegistry,
@@ -45,6 +46,17 @@ logging.basicConfig(level=logging.INFO)
 
 nv_client: Optional[NetVisionClient] = None
 nv_ws_bridge: Optional[NetVisionWSBridge] = None
+health_monitor: Optional[HealthMonitor] = None
+exec_cache = TTLCache(ttl=30.0, max_entries=256)
+
+# Read-only tool actions are safe to cache; mutating ones never are.
+CACHEABLE_ACTIONS = {
+    "version", "sessions_list", "search", "module_info", "module_search", "show",
+    "devices", "vulnerabilities", "topology", "correlation", "recon_summary",
+    "situation_brief", "weather", "weather_map", "flights", "aircraft", "satellites",
+    "cctv", "cyclones", "launches", "military", "fires", "earthquakes", "imagery",
+    "status", "notes_list", "note_read", "note_search", "canvases_list", "canvas_read",
+}
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -291,9 +303,12 @@ manager = ConnectionManager()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global nv_client, nv_ws_bridge
+    global nv_client, nv_ws_bridge, health_monitor
 
     register_default_adapters()
+    health_monitor = HealthMonitor(registry, interval=30.0)
+    await health_monitor.start()
+    await health_monitor.check_all(force=True)
 
     nv_client = NetVisionClient()
     nv_ws_bridge = NetVisionWSBridge()
@@ -322,6 +337,15 @@ async def lifespan(app: FastAPI):
     task = asyncio.create_task(heartbeat())
     yield
     task.cancel()
+    if health_monitor:
+        await health_monitor.stop()
+    for name in registry.list():
+        adapter = registry.get(name)
+        if adapter:
+            try:
+                await adapter.disconnect()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Error disconnecting %s: %s", name, exc)
     if nv_client:
         await nv_client.close()
     if nv_ws_bridge:
@@ -1111,36 +1135,59 @@ class ToolExecuteRequest(BaseModel):
 
 
 @app.post("/api/tools/{tool}/execute")
-async def execute_tool(tool: str, req: ToolExecuteRequest):
+async def execute_tool(tool: str, req: ToolExecuteRequest, response: Response):
     adapter = get_adapter(tool)
     if adapter is None:
         raise HTTPException(404, f"Unknown tool: {tool}")
-    result = await adapter.execute(req.action, req.params)
 
-    # Normalize tool output into a canonical event and push through the bus
-    # -> subscribers (WS fan-out, timeline, pipelines).
-    canonical = await event_bus.emit(
-        source_tool=tool,
-        event_type=f"{tool}.{req.action}",
-        payload={"action": req.action, "params": req.params or {}, "result": result},
-        severity="info",
-        title=f"{tool} {req.action}",
-        target_ref=req.target_ref,
-        correlation_id=req.correlation_id,
-    )
+    breaker = health_monitor.breaker(tool) if health_monitor else CircuitBreaker(tool)
+    cacheable = req.action in CACHEABLE_ACTIONS
+    cache_key = exec_cache.make_key(tool, req.action, req.params or {})
+    cached = False
 
-    await manager.broadcast({
-        "type": f"{tool}.executed",
-        "data": {
-            "tool": tool,
-            "action": req.action,
-            "params": req.params or {},
-            "result": result,
-            "target_ref": req.target_ref,
-        },
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    })
-    return {"tool": tool, "action": req.action, "result": result}
+    try:
+        if cacheable:
+            async def compute():
+                return await breaker.call(adapter.execute, req.action, req.params)
+
+            result, cached = await exec_cache.get_or_create(
+                cache_key, compute, ttl=60.0 if tool == "godseye" else 30.0
+            )
+        else:
+            result = await breaker.call(adapter.execute, req.action, req.params)
+    except CircuitOpen as exc:
+        raise HTTPException(503, str(exc))
+
+    response.headers["X-Cache"] = "HIT" if cached else "MISS"
+
+    # Invalidate cached reads after a mutating action; skip duplicate fan-out on hits.
+    if not cacheable:
+        exec_cache.invalidate(tool)
+    if not cached:
+        # Normalize tool output into a canonical event and push through the bus
+        # -> subscribers (WS fan-out, timeline, pipelines).
+        await event_bus.emit(
+            source_tool=tool,
+            event_type=f"{tool}.{req.action}",
+            payload={"action": req.action, "params": req.params or {}, "result": result},
+            severity="info",
+            title=f"{tool} {req.action}",
+            target_ref=req.target_ref,
+            correlation_id=req.correlation_id,
+        )
+
+        await manager.broadcast({
+            "type": f"{tool}.executed",
+            "data": {
+                "tool": tool,
+                "action": req.action,
+                "params": req.params or {},
+                "result": result,
+                "target_ref": req.target_ref,
+            },
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+    return {"tool": tool, "action": req.action, "result": result, "cached": cached}
 
 
 @app.get("/api/events")
@@ -1152,6 +1199,41 @@ async def api_events(
     """Unified cross-tool event timeline from the event bus."""
     events = event_bus.list_events(limit=limit, source_tool=source_tool, event_type=event_type)
     return {"events": [e.model_dump() for e in events]}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Autonomic Control Plane (self-monitoring / self-healing / efficiency)
+# ═══════════════════════════════════════════════════════════════════
+
+@app.get("/api/system/autonomy")
+async def autonomy_status():
+    snapshot = health_monitor.snapshot() if health_monitor else {"running": False}
+    snapshot["exec_cache"] = exec_cache.stats()
+    return snapshot
+
+
+@app.post("/api/system/autonomy/recheck")
+async def autonomy_recheck():
+    if not health_monitor:
+        raise HTTPException(503, "Autonomic monitor not running")
+    return await health_monitor.check_all(force=True)
+
+
+@app.post("/api/system/autonomy/recover/{tool}")
+async def autonomy_recover(tool: str):
+    if not health_monitor:
+        raise HTTPException(503, "Autonomic monitor not running")
+    result = await health_monitor.recover(tool)
+    if result.get("error") == "Unknown tool":
+        raise HTTPException(404, "Unknown tool")
+    if result.get("recovered"):
+        exec_cache.invalidate(tool)
+    return result
+
+
+@app.delete("/api/system/autonomy/cache")
+async def autonomy_clear_cache():
+    return {"invalidated": exec_cache.invalidate()}
 
 
 # ═══════════════════════════════════════════════════════════════════

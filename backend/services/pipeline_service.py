@@ -11,6 +11,7 @@ Runbooks (pipelines) bundled with Oblivion:
   - Web Vuln Sweep    : Recon-ng web modules -> NetVision deep scan -> vulns
 """
 
+import asyncio
 import uuid
 import logging
 from datetime import datetime, timezone
@@ -102,6 +103,25 @@ def _order_steps(steps: list[PipelineStep]) -> list[PipelineStep]:
     return ordered
 
 
+def _level_steps(steps: list[PipelineStep]) -> list[list[PipelineStep]]:
+    """Group steps into dependency levels; steps in one level can run in parallel."""
+    ordered = _order_steps(steps)
+    by_id = {s.id: s for s in ordered}
+    levels: dict[str, int] = {}
+
+    def depth(step: PipelineStep) -> int:
+        if step.id in levels:
+            return levels[step.id]
+        deps = [by_id[d] for d in step.depends_on if d in by_id]
+        levels[step.id] = 1 + max(depth(d) for d in deps) if deps else 0
+        return levels[step.id]
+
+    groups: dict[int, list[PipelineStep]] = {}
+    for step in ordered:
+        groups.setdefault(depth(step), []).append(step)
+    return [groups[k] for k in sorted(groups)]
+
+
 def _resolve_condition(condition: str, result: dict) -> bool:
     """Resolve a simple condition: dotted key path into the step result payload."""
     value: Any = result
@@ -165,6 +185,54 @@ class PipelineService:
 
     # ── Execution ───────────────────────────────────────────────────
 
+    async def _execute_step(self, step: PipelineStep, run: PipelineRun, pipeline: Pipeline) -> bool:
+        """Execute one step. Returns False when its condition skips downstream work."""
+        run.current_step = step.id
+        step.status = "running"
+        step.started_at = _now()
+        run.logs.append({"step_id": step.id, "level": "info", "message": f"Running {step.tool}::{step.action}"})
+
+        adapter = get_adapter(step.tool)
+        if adapter is None:
+            step.status = "failed"
+            step.error = f"Unknown tool: {step.tool}"
+            run.status = "failed"
+            run.error = f"Unknown tool: {step.tool}"
+            return False
+
+        try:
+            result = await adapter.execute(step.action, step.params)
+            step.status = "completed"
+            step.result = result
+            step.completed_at = _now()
+            run.step_results[step.id] = result
+
+            await event_bus.emit(
+                source_tool=step.tool,
+                event_type=f"{step.tool}.{step.action}",
+                payload={"action": step.action, "params": step.params, "result": result, "pipeline": pipeline.name, "run_id": run.id},
+                severity="info",
+                title=f"{pipeline.name} — {step.name}",
+                target_ref=run.target_ref,
+                correlation_id=run.correlation_id,
+            )
+
+            if step.condition:
+                ok = _resolve_condition(step.condition, result if isinstance(result, dict) else {})
+                if not ok:
+                    run.logs.append({"step_id": step.id, "level": "info", "message": f"Condition '{step.condition}' not met — skipping downstream steps"})
+                    return False
+            return True
+        except Exception as exc:  # noqa: BLE001
+            step.status = "failed"
+            step.error = str(exc)
+            # A failed step fails the run unless a sibling already failed it.
+            if run.status == "running":
+                run.status = "failed"
+                run.error = f"Step {step.id} failed: {exc}"
+            run.logs.append({"step_id": step.id, "level": "error", "message": f"Step failed: {exc}"})
+            return False
+
     async def run(self, run_id: str) -> Optional[PipelineRun]:
         run = self.runs.get(run_id)
         if not run:
@@ -178,69 +246,48 @@ class PipelineService:
             run.error = f"Pipeline not found: {run.pipeline_id}"
             return run
 
-        if run.status == "gated" and run.approved:
+        if run.status in ("gated", "pending") and run.approved:
             run.status = "running"
-
         if run.status != "running":
             run.status = "running"
         run.started_at = _now()
 
-        ordered = _order_steps(pipeline.steps)
-        logger.info("Pipeline %s run %s starting — %d steps", pipeline.name, run.id, len(ordered))
+        levels = _level_steps(pipeline.steps)
+        skipped: set = set()
+        logger.info("Pipeline %s run %s starting — %d levels", pipeline.name, run.id, len(levels))
 
-        for step in ordered:
+        for group in levels:
             if run.status in ("cancelled", "failed"):
                 break
-            if step.gate and not run.approved:
+
+            runnable = [s for s in group if not any(dep in skipped for dep in s.depends_on)]
+            skipped.update(s.id for s in group if s not in runnable)
+            if not runnable:
+                continue
+
+            # Human gates halt execution of the whole level before any destructive action.
+            gated = [s for s in runnable if s.gate and not run.approved]
+            if gated:
                 run.status = "gated"
-                run.current_step = step.id
+                run.current_step = gated[0].id
                 run.completed_at = _now()
+                skipped.update(s.id for s in gated)
                 break
 
-            run.current_step = step.id
-            step.status = "running"
-            step.started_at = _now()
-            run.logs.append({"step_id": step.id, "level": "info", "message": f"Running {step.tool}::{step.action}"})
+            # Independent steps in the same level execute concurrently.
+            outcomes = await asyncio.gather(
+                *(self._execute_step(s, run, pipeline) for s in runnable),
+                return_exceptions=True,
+            )
+            for step, outcome in zip(runnable, outcomes):
+                if isinstance(outcome, Exception):
+                    run.status = "failed"
+                    run.error = f"Step {step.id} crashed: {outcome}"
+                    run.logs.append({"step_id": step.id, "level": "error", "message": f"Step crashed: {outcome}"})
+                elif not outcome:
+                    skipped.add(step.id)
 
-            adapter = get_adapter(step.tool)
-            if adapter is None:
-                step.status = "failed"
-                step.error = f"Unknown tool: {step.tool}"
-                run.status = "failed"
-                run.error = f"Unknown tool: {step.tool}"
-                break
-
-            try:
-                result = await adapter.execute(step.action, step.params)
-                step.status = "completed"
-                step.result = result
-                step.completed_at = _now()
-                run.step_results[step.id] = result
-
-                await event_bus.emit(
-                    source_tool=step.tool,
-                    event_type=f"{step.tool}.{step.action}",
-                    payload={"action": step.action, "params": step.params, "result": result, "pipeline": pipeline.name, "run_id": run.id},
-                    severity="info",
-                    title=f"{pipeline.name} — {step.name}",
-                    target_ref=run.target_ref,
-                    correlation_id=run.correlation_id,
-                )
-
-                if step.condition:
-                    ok = _resolve_condition(step.condition, result if isinstance(result, dict) else {})
-                    if not ok:
-                        run.logs.append({"step_id": step.id, "level": "info", "message": f"Condition '{step.condition}' not met — skipping downstream steps"})
-                        run.status = "completed"
-                        run.completed_at = _now()
-                        return run
-
-            except Exception as e:  # noqa: BLE001
-                step.status = "failed"
-                step.error = str(e)
-                run.status = "failed"
-                run.error = f"Step {step.id} failed: {e}"
-                run.logs.append({"step_id": step.id, "level": "error", "message": f"Step failed: {e}"})
+            if run.status in ("cancelled", "failed", "gated"):
                 break
 
         if run.status == "running":

@@ -9,6 +9,7 @@ stores, audit logs and pipeline hooks.
 Flow: tool execute/normalize -> event_bus.emit -> subscribers (WS, timeline, ...)
 """
 
+import asyncio
 import logging
 from typing import Awaitable, Callable, List, Optional
 
@@ -39,11 +40,15 @@ class EventBus:
         self._history.append(event)
         if len(self._history) > self._max_history:
             self._history = self._history[-self._max_history:]
-        for cb in list(self._subs):
-            try:
-                await cb(event)
-            except Exception as e:  # noqa: BLE001
-                logger.warning("EventBus subscriber failed: %s", e)
+        subscribers = list(self._subs)
+        if subscribers:
+            results = await asyncio.gather(
+                *(cb(event) for cb in subscribers),
+                return_exceptions=True,
+            )
+            for cb, result in zip(subscribers, results):
+                if isinstance(result, Exception):
+                    logger.warning("EventBus subscriber %s failed: %s", getattr(cb, "__name__", cb), result)
 
     async def emit(
         self,

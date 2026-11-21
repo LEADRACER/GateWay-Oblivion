@@ -49,14 +49,23 @@ class GodsEyeAdapter(ToolAdapter):
         self.base_url = (base_url or "http://localhost:4173").rstrip("/")
         self.timeout = timeout
         self._connected = False
+        self._client: Optional[httpx.AsyncClient] = None
+
+    def _get_client(self) -> httpx.AsyncClient:
+        """Reuse a pooled HTTP client instead of creating one per request."""
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(
+                timeout=self.timeout,
+                limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            )
+        return self._client
 
     # ── ToolAdapter interface ──────────────────────────────────────
 
     async def _reachable(self) -> bool:
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                resp = await client.get(self.base_url)
-                return resp.status_code < 500
+            resp = await self._get_client().get(self.base_url)
+            return resp.status_code < 500
         except Exception:
             return False
 
@@ -77,6 +86,9 @@ class GodsEyeAdapter(ToolAdapter):
 
     async def disconnect(self) -> None:
         self._connected = False
+        if self._client is not None and not self._client.is_closed:
+            await self._client.aclose()
+        self._client = None
 
     # ── actions ────────────────────────────────────────────────────
 
@@ -86,8 +98,7 @@ class GodsEyeAdapter(ToolAdapter):
         if not endpoint:
             raise ValueError(f"Unknown God's Eye View action: {action}")
         url = f"{self.base_url}/api/{endpoint}"
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            resp = await client.get(url, params=params)
+        resp = await self._get_client().get(url, params=params)
         try:
             data = resp.json()
         except Exception:

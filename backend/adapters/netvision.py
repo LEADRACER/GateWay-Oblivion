@@ -41,6 +41,8 @@ class NetVisionAdapter(ToolAdapter):
         return [
             "trigger_scan",
             "stop_scan",
+            "sonar_scan",
+            "sonar_sensors",
             "devices",
             "vulnerabilities",
             "topology",
@@ -54,6 +56,14 @@ class NetVisionAdapter(ToolAdapter):
             return await self.client.trigger_scan(params.get("target"), params.get("profile", "quick"))
         if action == "stop_scan":
             return await self.client.stop_scan()
+        if action == "sonar_scan":
+            return await self.client.sonar_scan(
+                target=params.get("target"),
+                mode=params.get("mode", "sonar"),
+                duration=int(params.get("duration", 10)),
+            )
+        if action == "sonar_sensors":
+            return await self.client.sonar_sensors()
         if action == "devices":
             return {"devices": await self.client.devices()}
         if action == "vulnerabilities":

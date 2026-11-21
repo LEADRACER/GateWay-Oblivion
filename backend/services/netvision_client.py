@@ -129,6 +129,21 @@ class NetVisionClient:
         """Stop the active scan."""
         return await self._post("/scan/stop")
 
+    async def sonar_scan(
+        self,
+        target: Optional[str] = None,
+        mode: str = "sonar",
+        duration: int = 10,
+    ) -> dict:
+        """Run NetVision's modular multi-sensor sonar discovery."""
+        return await self._post("/api/discovery/scan", {
+            "target": target, "mode": mode, "duration": duration,
+        })
+
+    async def sonar_sensors(self) -> dict:
+        """List available sonar sensors and their capabilities."""
+        return await self._get("/api/discovery/sensors")
+
     async def scan_history(self, limit: int = 20) -> list[dict]:
         """Recent scan history."""
         data = await self._get("/scan/history", {"limit": limit})

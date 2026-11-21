@@ -20,6 +20,21 @@ from services.ws_bridge import NetVisionWSBridge
 from services.vuln_service import vuln_store, VulnCreate, VulnPatch
 from services.operations_service import ops_store, ops_executor, OperationCreate, RUNBOOKS
 from services.intel_service import intel_store, ReportCreate
+from services.event_bus import event_bus
+from models.canonical import CanonicalEvent, canonical_event
+from adapters import (
+    AdapterRegistry,
+    get_adapter,
+    get_tool_names,
+    register_default_adapters,
+    registry,
+)
+from adapters.netvision import NetVisionAdapter  # noqa: F401
+from adapters.metasploit import MetasploitAdapter  # noqa: F401
+from adapters.reconng import ReconNgAdapter  # noqa: F401
+from adapters.godseye import GodsEyeAdapter  # noqa: F401
+from adapters.obsidian import ObsidianAdapter  # noqa: F401
+from services.obsidian_service import obsidian_service
 
 logger = logging.getLogger("oblivion")
 logging.basicConfig(level=logging.INFO)
@@ -278,6 +293,8 @@ manager = ConnectionManager()
 async def lifespan(app: FastAPI):
     global nv_client, nv_ws_bridge
 
+    register_default_adapters()
+
     nv_client = NetVisionClient()
     nv_ws_bridge = NetVisionWSBridge()
 
@@ -372,6 +389,15 @@ async def websocket_endpoint(websocket: WebSocket):
     if nv_ws_bridge:
         nv_ws_bridge.add_listener(websocket)
 
+    # Subscribe to the unified event bus -> fan normalized events to this client
+    bus_cb = None
+    async def bus_forward(event: CanonicalEvent):
+        try:
+            await websocket.send_json({"type": "event", "data": event.model_dump()})
+        except Exception:
+            pass
+    bus_cb = event_bus.subscribe(bus_forward)
+
     try:
         while True:
             data = await websocket.receive_text()
@@ -393,6 +419,8 @@ async def websocket_endpoint(websocket: WebSocket):
         manager.disconnect(websocket)
         if nv_ws_bridge:
             nv_ws_bridge.remove_listener(websocket)
+        if bus_cb is not None:
+            await event_bus.unsubscribe(bus_cb)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -918,6 +946,43 @@ async def intel_threats():
     return intel_store.build_threat_feed()
 
 
+@app.get("/api/osint")
+async def osint_overview():
+    """Aggregated OSINT intel across live sources: godseye adapters + threat feed."""
+    tools_health = await registry.health_all()
+    godseye_health = tools_health.get("godseye") or {}
+    sources = []
+    if godseye_health.get("available"):
+        sources = [
+            {
+                "source": f"godseye:{name}",
+                "status": "live",
+                "action": name,
+            }
+            for name in (godseye_health.get("actions") or [])
+        ]
+    else:
+        sources = [
+            {
+                "source": f"godseye:{name}",
+                "status": godseye_health.get("status", "unavailable"),
+                "action": name,
+            }
+            for name in (godseye_health.get("actions") or [])
+        ]
+    threats = intel_store.build_threat_feed()
+    summary = intel_store.build_summary(
+        vuln_store=vuln_store,
+        ops_store=ops_store,
+        netvision_status={"reachable": nv_client is not None and nv_client._token is not None},
+    )
+    return {
+        "sources": sources,
+        "threats": threats,
+        "summary": summary,
+    }
+
+
 @app.get("/api/intelligence/export")
 async def intel_export(format: str = Query("json")):
     """Export all Oblivion data."""
@@ -976,6 +1041,402 @@ async def delete_report(report_id: str):
 # ═══════════════════════════════════════════════════════════════════
 # Entrypoint
 # ═══════════════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════════════
+# Tool Registry & Tool Actions API (Phase 1 — Multi-Tool Integration)
+# ═══════════════════════════════════════════════════════════════════
+
+@app.get("/tools/health")
+async def tools_health():
+    """Aggregate health across all registered tool adapters."""
+    return await registry.health_all()
+
+
+@app.get("/api/tools")
+async def list_tools():
+    """List all registered tools with live health + capabilities."""
+    adapters_health = await registry.health_all()
+    tools = []
+    for name, health in sorted(adapters_health.items()):
+        adapter = registry.get(name)
+        tools.append({
+            "name": name,
+            "status": health.get("status", "unknown"),
+            "available": health.get("available", health.get("status") == "available"),
+            "connected": health.get("connected", False),
+            "actions": adapter.get_actions() if adapter else [],
+        })
+    return tools
+
+
+@app.get("/api/tools/{tool}/health")
+async def get_tool_health(tool: str):
+    adapter = get_adapter(tool)
+    if adapter is None:
+        raise HTTPException(404, f"Unknown tool: {tool}")
+    return await adapter.health()
+
+
+@app.post("/api/tools/{tool}/connect")
+async def connect_tool(tool: str):
+    adapter = get_adapter(tool)
+    if adapter is None:
+        raise HTTPException(404, f"Unknown tool: {tool}")
+    connected = await adapter.connect()
+    return {"name": tool, "connected": connected}
+
+
+@app.delete("/api/tools/{tool}/disconnect")
+async def disconnect_tool(tool: str):
+    adapter = get_adapter(tool)
+    if adapter is None:
+        raise HTTPException(404, f"Unknown tool: {tool}")
+    await adapter.disconnect()
+    return {"name": tool, "disconnected": True}
+
+
+@app.get("/api/tools/{tool}/actions")
+async def get_tool_actions(tool: str):
+    adapter = get_adapter(tool)
+    if adapter is None:
+        raise HTTPException(404, f"Unknown tool: {tool}")
+    return {"name": tool, "actions": adapter.get_actions()}
+
+
+class ToolExecuteRequest(BaseModel):
+    action: str
+    params: Optional[dict] = None
+    target_ref: Optional[str] = None
+    correlation_id: Optional[str] = None
+
+
+@app.post("/api/tools/{tool}/execute")
+async def execute_tool(tool: str, req: ToolExecuteRequest):
+    adapter = get_adapter(tool)
+    if adapter is None:
+        raise HTTPException(404, f"Unknown tool: {tool}")
+    result = await adapter.execute(req.action, req.params)
+
+    # Normalize tool output into a canonical event and push through the bus
+    # -> subscribers (WS fan-out, timeline, pipelines).
+    canonical = await event_bus.emit(
+        source_tool=tool,
+        event_type=f"{tool}.{req.action}",
+        payload={"action": req.action, "params": req.params or {}, "result": result},
+        severity="info",
+        title=f"{tool} {req.action}",
+        target_ref=req.target_ref,
+        correlation_id=req.correlation_id,
+    )
+
+    await manager.broadcast({
+        "type": f"{tool}.executed",
+        "data": {
+            "tool": tool,
+            "action": req.action,
+            "params": req.params or {},
+            "result": result,
+            "target_ref": req.target_ref,
+        },
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+    return {"tool": tool, "action": req.action, "result": result}
+
+
+@app.get("/api/events")
+async def api_events(
+    limit: int = Query(100),
+    source_tool: Optional[str] = Query(None),
+    event_type: Optional[str] = Query(None),
+):
+    """Unified cross-tool event timeline from the event bus."""
+    events = event_bus.list_events(limit=limit, source_tool=source_tool, event_type=event_type)
+    return {"events": [e.model_dump() for e in events]}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Pipeline Orchestrator API (Phase 3 — Multi-Pipeline Infrastructure)
+# ═══════════════════════════════════════════════════════════════════
+
+from services.pipeline_service import (
+    Pipeline,
+    PipelineRun,
+    PipelineStep,
+    PipelineService,
+    pipeline_service,
+    register_builtin_pipelines,
+)
+
+
+class PipelineStepCreate(BaseModel):
+    id: Optional[str] = None
+    name: str
+    tool: str
+    action: str
+    params: dict = {}
+    depends_on: list = []
+    condition: Optional[str] = None
+    gate: bool = False
+
+
+class PipelineCreate(BaseModel):
+    name: str
+    description: str = ""
+    steps: list[PipelineStepCreate] = []
+
+
+@app.get("/api/pipelines")
+async def list_pipelines():
+    return {"pipelines": [p.model_dump() for p in pipeline_service.list_pipelines()]}
+
+
+@app.get("/api/pipelines/runs")
+async def list_pipeline_runs(
+    status: Optional[str] = Query(None),
+    limit: int = Query(50),
+):
+    runs = pipeline_service.list_runs(status=status, limit=limit)
+    return {"runs": [r.model_dump() for r in runs]}
+
+
+@app.post("/api/pipelines")
+async def create_pipeline(data: PipelineCreate):
+    pipeline = Pipeline(
+        name=data.name,
+        description=data.description,
+        steps=[PipelineStep(**{**s.model_dump(), "id": s.id or f"{data.name.replace(' ', '-').lower()}-{i}"}) for i, s in enumerate(data.steps)],
+    )
+    pipeline_service.register(pipeline)
+    return pipeline.model_dump()
+
+
+@app.get("/api/pipelines/{pipeline_id}")
+async def get_pipeline(pipeline_id: str):
+    pipeline = pipeline_service.get_pipeline(pipeline_id)
+    if not pipeline:
+        raise HTTPException(404, "Pipeline not found")
+    return pipeline.model_dump()
+
+
+@app.delete("/api/pipelines/{pipeline_id}")
+async def delete_pipeline(pipeline_id: str):
+    ok = pipeline_service.pipelines.pop(pipeline_id, None) is not None
+    return {"ok": ok}
+
+
+@app.post("/api/pipelines/{pipeline_id}/run")
+async def run_pipeline(pipeline_id: str):
+    run = pipeline_service.create_run(pipeline_id=pipeline_id)
+    if not run:
+        raise HTTPException(404, "Pipeline not found")
+    await pipeline_service.run(run.id)
+    return {"run_id": run.id, "status": run.status}
+
+
+@app.get("/api/pipelines/runs/{run_id}")
+async def get_pipeline_run(run_id: str):
+    run = pipeline_service.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "Pipeline run not found")
+    return run.model_dump()
+
+
+@app.post("/api/pipelines/runs/{run_id}/approve")
+async def approve_pipeline_run(run_id: str):
+    run = pipeline_service.approve(run_id)
+    if not run:
+        raise HTTPException(404, "Pipeline run not found")
+    if run.status == "running":
+        await pipeline_service.run(run.id)
+    return {"run_id": run.id, "status": run.status, "approved": True}
+
+
+@app.delete("/api/pipelines/runs/{run_id}")
+async def cancel_pipeline_run(run_id: str):
+    run = pipeline_service.cancel(run_id)
+    if not run:
+        raise HTTPException(404, "Pipeline run not found")
+    return {"run_id": run.id, "status": run.status}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Obsidian Integration API (server-side notes + JSON Canvas management)
+# ═══════════════════════════════════════════════════════════════════
+
+class ObsidianNoteWrite(BaseModel):
+    path: str
+    content: str
+    mode: str = "overwrite"  # overwrite | append
+
+
+class ObsidianNoteAppend(BaseModel):
+    content: str
+    mode: str = "append"
+
+
+class ObsidianCanvasWrite(BaseModel):
+    name: str
+    canvas: dict = Field(default_factory=lambda: {"nodes": [], "edges": []})
+
+
+class ObsidianNodeWrite(BaseModel):
+    node: dict
+
+
+class ObsidianEdgeWrite(BaseModel):
+    edge: dict
+
+
+class ObsidianCanvasGenerate(BaseModel):
+    name: str = "Oblivion Pipeline Map.canvas"
+    pipelines: list = []
+
+
+class ObsidianReportExport(BaseModel):
+    report_id: Optional[str] = None
+    report: Optional[dict] = None
+
+
+async def _emit_obsidian_event(action: str, result: dict) -> None:
+    await event_bus.emit(
+        source_tool="obsidian",
+        event_type=f"obsidian.{action}",
+        payload={"action": action, "result": result},
+        severity="info",
+        title=f"Obsidian {action.replace('_', ' ')}",
+    )
+
+
+@app.get("/api/obsidian/status")
+async def obsidian_status():
+    return obsidian_service.status()
+
+
+@app.get("/api/obsidian/notes/search")
+async def obsidian_search_notes(q: str = Query(""), limit: int = Query(20)):
+    return {"results": obsidian_service.search_notes(q, limit)}
+
+
+@app.get("/api/obsidian/notes")
+async def obsidian_list_notes(folder: Optional[str] = Query(None)):
+    return {"notes": obsidian_service.list_notes(folder)}
+
+
+@app.get("/api/obsidian/notes/{path:path}")
+async def obsidian_read_note(path: str):
+    try:
+        return obsidian_service.read_note(path)
+    except FileNotFoundError:
+        raise HTTPException(404, "Note not found")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/obsidian/notes")
+async def obsidian_write_note(data: ObsidianNoteWrite):
+    try:
+        result = obsidian_service.write_note(data.path, data.content, data.mode)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    await _emit_obsidian_event("note_write", result)
+    return result
+
+
+@app.patch("/api/obsidian/notes/{path:path}")
+async def obsidian_append_note(path: str, data: ObsidianNoteAppend):
+    try:
+        result = obsidian_service.write_note(path, data.content, data.mode)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    await _emit_obsidian_event("note_append", result)
+    return result
+
+
+@app.delete("/api/obsidian/notes/{path:path}")
+async def obsidian_delete_note(path: str):
+    try:
+        result = obsidian_service.delete_note(path)
+    except FileNotFoundError:
+        raise HTTPException(404, "Note not found")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    await _emit_obsidian_event("note_delete", result)
+    return result
+
+
+@app.get("/api/obsidian/canvases")
+async def obsidian_list_canvases():
+    return {"canvases": obsidian_service.list_canvases()}
+
+
+@app.post("/api/obsidian/canvases/generate")
+async def obsidian_generate_canvas(data: ObsidianCanvasGenerate):
+    pipelines = data.pipelines or [p.model_dump() for p in pipeline_service.list_pipelines()]
+    try:
+        result = obsidian_service.generate_pipeline_canvas(pipelines, data.name)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    await _emit_obsidian_event("canvas_generate", result)
+    return result
+
+
+@app.get("/api/obsidian/canvases/{name}")
+async def obsidian_read_canvas(name: str):
+    try:
+        return obsidian_service.read_canvas(name)
+    except FileNotFoundError:
+        raise HTTPException(404, "Canvas not found")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/obsidian/canvases")
+async def obsidian_write_canvas(data: ObsidianCanvasWrite):
+    try:
+        result = obsidian_service.write_canvas(data.name, data.canvas)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    await _emit_obsidian_event("canvas_write", result)
+    return result
+
+
+@app.post("/api/obsidian/canvases/{name}/nodes")
+async def obsidian_add_canvas_node(name: str, data: ObsidianNodeWrite):
+    try:
+        result = obsidian_service.add_node(name, data.node)
+    except (FileNotFoundError, ValueError) as e:
+        raise HTTPException(404 if isinstance(e, FileNotFoundError) else 400, str(e))
+    await _emit_obsidian_event("canvas_add_node", result)
+    return result
+
+
+@app.post("/api/obsidian/canvases/{name}/edges")
+async def obsidian_add_canvas_edge(name: str, data: ObsidianEdgeWrite):
+    try:
+        result = obsidian_service.add_edge(name, data.edge)
+    except (FileNotFoundError, ValueError) as e:
+        raise HTTPException(404 if isinstance(e, FileNotFoundError) else 400, str(e))
+    await _emit_obsidian_event("canvas_add_edge", result)
+    return result
+
+
+@app.post("/api/obsidian/reports/export")
+async def obsidian_export_report(data: ObsidianReportExport):
+    report = data.report
+    if data.report_id:
+        stored = intel_store.get_report(data.report_id)
+        if not stored:
+            raise HTTPException(404, "Report not found")
+        report = stored.model_dump()
+    if not report:
+        raise HTTPException(400, "Provide report_id or report")
+    try:
+        result = obsidian_service.export_report_note(report)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    await _emit_obsidian_event("report_export", result)
+    return result
+
 
 if __name__ == "__main__":
     import uvicorn

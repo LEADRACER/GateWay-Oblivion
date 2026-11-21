@@ -3,9 +3,20 @@
 // ── GateWay:Oblivion — Top Bar ─────────────────────────────────────
 
 import { useSidebarStore } from '@/stores/operations';
+import { useTools } from '@/hooks/useTools';
+import { useWS } from '@/hooks/useWS';
+
+const API_HOST = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
+const WS_URL = API_HOST.replace(/^http/, 'ws');
 
 export function TopBar() {
   const toggle = useSidebarStore((s) => s.toggle);
+  const { data: tools = [] } = useTools();
+  const { status: wsStatus } = useWS({ url: WS_URL, onMessage: () => {} });
+
+  const total = tools.length;
+  const online = tools.filter((t) => t.status === 'available').length;
+  const anyLive = online > 0;
 
   return (
     <header className="fixed top-0 left-0 right-0 z-40 h-12 border-b border-border bg-surface flex items-center px-4 gap-3">
@@ -30,10 +41,36 @@ export function TopBar() {
       {/* Spacer */}
       <div className="flex-1" />
 
-      {/* Status indicator placeholder */}
-      <div className="flex items-center gap-2">
-        <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent glow-accent" />
-        <span className="font-mono text-[10px] text-text-muted">WS CONNECTED</span>
+      {/* Live status cluster */}
+      <div className="flex items-center gap-4">
+        {/* WebSocket */}
+        <div className="flex items-center gap-2">
+          <span
+            className={`inline-block w-1.5 h-1.5 rounded-full ${
+              wsStatus === 'connected' ? 'bg-accent glow-accent' : 'bg-danger'
+            }`}
+          />
+          <span className="font-mono text-[10px] tracking-widest text-text-muted">
+            WS · {wsStatus.toUpperCase()}
+          </span>
+        </div>
+
+        <div className="w-px h-4 bg-border" />
+
+        {/* Tool fleet */}
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-[10px] tracking-widest text-text-muted">TOOLS</span>
+          <span
+            className={`font-mono text-[10px] tracking-widest ${
+              anyLive ? 'text-accent' : 'text-danger'
+            }`}
+          >
+            {anyLive ? 'LIVE' : 'OFFLINE'}
+          </span>
+          <span className="font-mono text-[9px] text-text-dim">
+            {online}/{total} ONLINE
+          </span>
+        </div>
       </div>
     </header>
   );

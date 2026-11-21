@@ -48,6 +48,26 @@ const navItems: NavItem[] = [
     href: '/intelligence',
     icon: <ChipIcon />,
   },
+  {
+    label: 'Tools',
+    href: '/tools',
+    icon: <TerminalIcon />,
+  },
+  {
+    label: 'Pipelines',
+    href: '/pipelines',
+    icon: <FlowIcon />,
+  },
+  {
+    label: 'OSINT',
+    href: '/osint',
+    icon: <SatelliteIcon />,
+  },
+  {
+    label: 'Obsidian',
+    href: '/obsidian',
+    icon: <BookIcon />,
+  },
 ];
 
 export function SideNav() {
@@ -152,6 +172,26 @@ function ChipIcon() {
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
       <rect x="3" y="3" width="8" height="8" rx="1" />
       <path d="M5 1v2M9 1v2M5 11v2M9 11v2M1 5h2M1 9h2M11 5h2M11 9h2" />
+    </svg>
+  );
+}
+
+function FlowIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+      <rect x="1" y="1" width="4" height="4" rx="0.5" />
+      <rect x="9" y="1" width="4" height="4" rx="0.5" />
+      <rect x="5" y="9" width="4" height="4" rx="0.5" />
+      <path d="M3 5v2h8V5M7 7v2" />
+    </svg>
+  );
+}
+
+function BookIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+      <path d="M2 2h4a2 2 0 0 1 2 2v8a2 2 0 0 0-2-2H2z" />
+      <path d="M12 2H8a2 2 0 0 0-2 2v8a2 2 0 0 1 2-2h4z" />
     </svg>
   );
 }

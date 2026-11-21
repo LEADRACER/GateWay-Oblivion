@@ -175,3 +175,144 @@ export function useDeleteReport() {
     },
   });
 }
+
+// ── OSINT Overview ─────────────────────────────────────────────────
+
+export interface OsintSource {
+  source: string;
+  status: string;
+  action: string;
+}
+
+export interface OsintOverview {
+  sources: OsintSource[];
+  threats: Threat[];
+  summary: IntelSummary;
+}
+
+export function useOsint() {
+  return useQuery({
+    queryKey: ['intel', 'osint'],
+    queryFn: async (): Promise<OsintOverview> => {
+      const res = await fetch(`${API_BASE}/api/osint`);
+      if (!res.ok) throw new Error('Failed to fetch osint overview');
+      return res.json();
+    },
+    refetchInterval: 60_000,
+  });
+}
+
+// ── Pipelines ──────────────────────────────────────────────────────
+
+export interface PipelineStep {
+  id: string;
+  name: string;
+  tool: string;
+  action: string;
+  params: Record<string, unknown>;
+  depends_on: string[];
+  condition: string | null;
+  gate: boolean;
+  status: string;
+  result: unknown;
+  error: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface Pipeline {
+  id: string;
+  name: string;
+  description: string;
+  steps: PipelineStep[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PipelineRun {
+  id: string;
+  pipeline_id: string;
+  pipeline_name: string;
+  status: string;
+  current_step: string | null;
+  step_results: Record<string, unknown>;
+  logs: unknown[];
+  approved: boolean;
+  target_ref: string | null;
+  correlation_id: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  error: string | null;
+}
+
+export function usePipelines() {
+  return useQuery({
+    queryKey: ['pipelines'],
+    queryFn: async (): Promise<Pipeline[]> => {
+      const res = await fetch(`${API_BASE}/api/pipelines`);
+      if (!res.ok) throw new Error('Failed to fetch pipelines');
+      const json = await res.json();
+      return Array.isArray(json) ? json : json.pipelines ?? [];
+    },
+    refetchInterval: 30_000,
+  });
+}
+
+export function usePipelineRuns(pipelineId?: string) {
+  return useQuery({
+    queryKey: ['pipelines', 'runs', pipelineId],
+    queryFn: async (): Promise<PipelineRun[]> => {
+      const url = pipelineId ? `${API_BASE}/api/pipelines?pipeline_id=${pipelineId}` : `${API_BASE}/api/pipelines/runs`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('Failed to fetch pipeline runs');
+      const json = await res.json();
+      const list = Array.isArray(json) ? json : json.runs ?? [];
+      return Array.isArray(list) ? list : [];
+    },
+    enabled: !pipelineId,
+  });
+}
+
+export function useRunPipeline() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (pipelineId: string) => {
+      const res = await fetch(`${API_BASE}/api/pipelines/${pipelineId}/run`, { method: 'POST' });
+      if (!res.ok) throw new Error('Failed to start pipeline');
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['pipelines'] });
+      queryClient.invalidateQueries({ queryKey: ['pipelines', 'runs'] });
+    },
+  });
+}
+
+export function useApprovePipelineRun() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (runId: string) => {
+      const res = await fetch(`${API_BASE}/api/pipelines/runs/${runId}/approve`, { method: 'POST' });
+      if (!res.ok) throw new Error('Failed to approve run');
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['pipelines', 'runs'] });
+    },
+  });
+}
+
+export function useCancelPipelineRun() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (runId: string) => {
+      const res = await fetch(`${API_BASE}/api/pipelines/runs/${runId}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Failed to cancel run');
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['pipelines', 'runs'] });
+    },
+  });
+}

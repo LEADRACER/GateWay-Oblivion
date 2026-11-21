@@ -15,6 +15,11 @@ from dataclasses import dataclass, field
 
 from pydantic import BaseModel, Field
 
+try:
+    from models.canonical import CanonicalEvent
+except ImportError:
+    from backend.models.canonical import CanonicalEvent
+
 logger = logging.getLogger("oblivion.intel")
 
 
@@ -42,12 +47,49 @@ class Report(BaseModel):
 class TimelineEvent(BaseModel):
     id: str
     timestamp: str
-    event_type: str  # operation | vulnerability | scan | alert | target
+    event_type: str  # operation | vulnerability | scan | alert | target | recon | intel
     title: str
     description: Optional[str] = None
     severity: Optional[str] = None
     source: str
     related_id: Optional[str] = None
+
+
+# Map a canonical tool action (e.g. "netvision.vulnerabilities" -> action
+# "vulnerabilities") onto a UI-friendly timeline category.
+def canonical_to_timeline(event: CanonicalEvent) -> TimelineEvent:
+    etype = event.event_type or "info"
+    action = etype.split(".", 1)[1].lower() if "." in etype else etype.lower()
+
+    if "cve" in action or action.startswith(("vuln", "finding", "exploit")):
+        category = "vulnerability"
+    elif action.startswith(("scan", "trigger", "stop", "device", "service", "port", "topology", "host", "network", "probe", "recon")):
+        category = "scan"
+    elif action.startswith(("module", "modules", "recon", "search", "enum", "footprint", "subdom")):
+        category = "recon"
+    elif action.startswith(("session", "run", "version", "exec", "command", "init", "load", "extract", "report", "handler")):
+        category = "operation"
+    elif action.startswith(("weather", "flight", "satellite", "cctv", "cyclone", "military", "fire", "earthquake", "imagery", "situation", "geocode", "maritime", "naval", "space", "intel", "threat", "earth_", "quake_")):
+        category = "intel"
+    elif action.startswith(("target", "asset", "host", "ip", "domain", "email", "credential", "user", "org")):
+        category = "target"
+    else:
+        category = "operation"
+
+    description: Optional[str] = event.description
+    if not description and event.payload:
+        description = json.dumps(event.payload, default=str)[:300]
+
+    return TimelineEvent(
+        id=event.id,
+        timestamp=event.timestamp,
+        event_type=category,
+        title=event.title or f"{event.source_tool} {action}",
+        description=description,
+        severity=event.severity or None,
+        source=event.source_tool,
+        related_id=event.target_ref,
+    )
 
 
 # ── Report Formats ──────────────────────────────────────────────────
@@ -368,7 +410,15 @@ class IntelStore:
         }
 
     def build_timeline(self, hours: int = 48) -> list[TimelineEvent]:
-        """Build a timeline of recent security events from all stores."""
+        """Build a timeline of recent security events.
+
+        Prefers live normalized events from the unified event bus; falls back
+        to seed events when no real activity has been recorded yet.
+        """
+        live_events = self._live_timeline_events(hours)
+        if live_events:
+            return live_events
+
         now = datetime.now(timezone.utc)
         cutoff = now - timedelta(hours=hours)
         events: list[TimelineEvent] = []
@@ -410,6 +460,30 @@ class IntelStore:
         ]
         events.extend(seed_events)
         return sorted(events, key=lambda e: e.timestamp, reverse=True)
+
+    def _live_timeline_events(self, hours: int = 48) -> list[TimelineEvent]:
+        """Pull recent normalized events from the unified event bus."""
+        try:
+            from services.event_bus import event_bus
+        except ImportError:
+            from backend.services.event_bus import event_bus
+
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(hours=hours)
+        timeline_events: list[TimelineEvent] = []
+
+        for ev in event_bus.list_events(limit=500):
+            try:
+                ts = datetime.fromisoformat(ev.timestamp)
+            except (ValueError, TypeError):
+                continue
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if ts < cutoff:
+                continue
+            timeline_events.append(canonical_to_timeline(ev))
+
+        return sorted(timeline_events, key=lambda e: e.timestamp, reverse=True)
 
     def build_threat_feed(self) -> list[dict]:
         """Aggregate threats from all sources into a unified feed."""

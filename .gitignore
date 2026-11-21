@@ -43,6 +43,9 @@ venv/
 .vscode/
 .idea/
 
+# typescript
+*.tsbuildinfo
+
 # planning
 .kilo/
 .hermes/

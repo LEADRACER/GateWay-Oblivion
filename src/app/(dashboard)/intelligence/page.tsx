@@ -2,7 +2,6 @@
 
 // ── GateWay:Oblivion — Intelligence Dashboard Page ────────────────
 
-import { useState } from 'react';
 import Link from 'next/link';
 import {
   useIntelSummary,
@@ -202,12 +201,18 @@ function TimelineRow({ event }: { event: { event_type: string; title: string; de
     scan: '📡',
     alert: '🚨',
     target: '🎯',
+    recon: '🔍',
+    intel: '🛰',
+    weather: '🌦',
+    satellite: '🛰',
   };
 
   const severityColors: Record<string, string> = {
     critical: 'text-danger',
     high: 'text-warning',
     medium: 'text-text-dim',
+    low: 'text-info',
+    info: 'text-text-dim',
   };
 
   return (
@@ -226,7 +231,7 @@ function TimelineRow({ event }: { event: { event_type: string; title: string; de
           <div className="font-mono text-[9px] text-text-dim mt-0.5">{event.description}</div>
         )}
         <div className="font-mono text-[8px] text-text-dim/50 mt-0.5">
-          {new Date(event.timestamp + 'Z').toLocaleString()}
+          {new Date(event.timestamp).toLocaleString()}
         </div>
       </div>
     </div>

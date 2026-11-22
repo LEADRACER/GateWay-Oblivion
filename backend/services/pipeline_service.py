@@ -351,6 +351,19 @@ def register_builtin_pipelines(service: PipelineService) -> None:
         )
     )
 
+    service.register(
+        Pipeline(
+            name="Web Vuln Sweep",
+            description="ProjectDiscovery chain: subdomains → HTTP probe → crawl → gated nuclei scan",
+            steps=[
+                PipelineStep(id="s1", name="Subdomain Enum", tool="projectdiscovery", action="subdomains", params={"domain": "example.com"}),
+                PipelineStep(id="s2", name="HTTP Probe", tool="projectdiscovery", action="http_probe", params={"target": "example.com"}, depends_on=["s1"]),
+                PipelineStep(id="s3", name="Web Crawl", tool="projectdiscovery", action="crawl", params={"url": "http://example.com"}, depends_on=["s2"]),
+                PipelineStep(id="s4", name="Nuclei Scan", tool="projectdiscovery", action="nuclei_scan", params={"target": "http://example.com"}, gate=True, depends_on=["s3"]),
+            ],
+        )
+    )
+
 
 pipeline_service = PipelineService()
 register_builtin_pipelines(pipeline_service)

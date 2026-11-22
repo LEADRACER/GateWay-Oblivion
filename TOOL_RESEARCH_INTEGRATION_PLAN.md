@@ -171,3 +171,12 @@ No architectural changes are required — only new adapters, normalizers and UI 
 
 **Bottom line:** the platform is ready for all of them; start with ProjectDiscovery + OSINT for
 the fastest, lowest-risk expansion of Oblivion's recon and intel surface.
+
+### 2026-11-22 — Tier 1a implemented
+`backend/adapters/projectdiscovery.py` is registered as the 6th tool with 8 actions
+(`tools`, `version`, `subdomains`, `http_probe`, `crawl`, `nuclei_scan`, `port_scan`, `dns_resolve`).
+It detects binaries from `PROJECTDISCOVERY_BIN_DIR` or PATH, degrades cleanly when absent (HTTP 503
+with a clear message), and emits canonical events through the existing bus. The built-in
+`Web Vuln Sweep` runbook chains subfinder → httpx → katana → gated nuclei. Tool health now reports
+per-binary availability and the Centre classifies its events as red. Verified: existing
+Metasploit/NetVision/Centre endpoints unchanged, 10 unit tests passing.

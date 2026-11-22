@@ -17,7 +17,7 @@ from adapters import get_adapter
 
 logger = logging.getLogger("oblivion.centre")
 
-RED_TOOLS = {"metasploit", "reconng"}
+RED_TOOLS = {"metasploit", "reconng", "projectdiscovery"}
 BLUE_TOOLS = {"godseye", "system"}
 BLUE_MARKERS = ("alert", "anomal", "capture", "rogue", "health.alert", "threat", "intel", "detection")
 
@@ -142,7 +142,7 @@ class CentreService:
         posture = max(0, min(100, round(100 - (critical * 6 + high * 2) + mitigations * 1.5)))
 
         red = {
-            "tools_ready": [name for name in ("metasploit", "reconng", "netvision", "godseye")
+            "tools_ready": [name for name in ("metasploit", "reconng", "netvision", "godseye", "projectdiscovery")
                             if (tools.get(name) or {}).get("available")],
             "pipelines_total": len(pipelines),
             "pipelines_running": sum(1 for r in runs if r.status == "running"),

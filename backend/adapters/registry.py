@@ -16,6 +16,7 @@ try:
     from adapters.reconng import ReconNgAdapter
     from adapters.godseye import GodsEyeAdapter
     from adapters.obsidian import ObsidianAdapter
+    from adapters.projectdiscovery import ProjectDiscoveryAdapter
 except ImportError:
     from backend.adapters.base import ToolAdapter
     from backend.adapters.netvision import NetVisionAdapter
@@ -23,6 +24,7 @@ except ImportError:
     from backend.adapters.reconng import ReconNgAdapter
     from backend.adapters.godseye import GodsEyeAdapter
     from backend.adapters.obsidian import ObsidianAdapter
+    from backend.adapters.projectdiscovery import ProjectDiscoveryAdapter
 
 
 class AdapterRegistry:
@@ -74,6 +76,7 @@ def register_default_adapters() -> dict:
     registry.register(ReconNgAdapter())
     registry.register(GodsEyeAdapter())
     registry.register(ObsidianAdapter())
+    registry.register(ProjectDiscoveryAdapter())
     return registry.adapters
 
 

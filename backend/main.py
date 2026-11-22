@@ -40,6 +40,7 @@ from adapters.metasploit import MetasploitAdapter  # noqa: F401
 from adapters.reconng import ReconNgAdapter  # noqa: F401
 from adapters.godseye import GodsEyeAdapter  # noqa: F401
 from adapters.obsidian import ObsidianAdapter  # noqa: F401
+from adapters.projectdiscovery import ProjectDiscoveryAdapter  # noqa: F401
 from services.obsidian_service import obsidian_service
 
 logger = logging.getLogger("oblivion")
@@ -297,7 +298,15 @@ def restore_snapshot() -> bool:
 
     pipelines = persistence.load("pipelines")
     if pipelines:
-        pipeline_service.pipelines = {k: Pipeline(**v) for k, v in pipelines.items()}
+        # Preserve saved/custom pipelines, but keep any newly added built-in
+        # runbook that isn't in the snapshot (forward-compatible upgrades).
+        builtins = list(pipeline_service.pipelines.values())
+        saved_names = {item.get("name") for item in pipelines.values() if isinstance(item, dict)}
+        merged = dict(pipelines)
+        for builtin in builtins:
+            if builtin.name not in saved_names:
+                merged[builtin.id] = builtin.model_dump()
+        pipeline_service.pipelines = {k: Pipeline(**v) for k, v in merged.items()}
     runs = persistence.load("pipeline_runs")
     if runs:
         pipeline_service.runs = {k: PipelineRun(**v) for k, v in runs.items()}
@@ -1234,8 +1243,8 @@ async def execute_tool(tool: str, req: ToolExecuteRequest, response: Response, r
         raise HTTPException(404, f"Unknown tool: {tool}")
 
     # Red-team guardrail: block offensive actions against out-of-scope targets.
-    if tool in ("metasploit", "reconng", "netvision") and req.action in (
-        "run_module", "trigger_scan", "sonar_scan",
+    if tool in ("metasploit", "reconng", "netvision", "projectdiscovery") and req.action in (
+        "run_module", "trigger_scan", "sonar_scan", "nuclei_scan", "port_scan", "crawl", "http_probe",
     ):
         target = req.target_ref or (req.params or {}).get("target")
         if not centre_service.target_allowed(target):
@@ -1257,6 +1266,8 @@ async def execute_tool(tool: str, req: ToolExecuteRequest, response: Response, r
         else:
             result = await breaker.call(adapter.execute, req.action, req.params)
     except CircuitOpen as exc:
+        raise HTTPException(503, str(exc))
+    except RuntimeError as exc:
         raise HTTPException(503, str(exc))
 
     response.headers["X-Cache"] = "HIT" if cached else "MISS"

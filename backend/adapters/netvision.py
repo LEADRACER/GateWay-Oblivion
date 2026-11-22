@@ -56,8 +56,8 @@ class NetVisionAdapter(ToolAdapter):
         "correlate_vulns": "correlate_vulns",
     }
 
-    def __init__(self, base_url="http://localhost:8000", username="admin", password="netvision"):
-        self._base_url = base_url
+    def __init__(self, base_url=None, username=None, password=None):
+        self._base_url = base_url or os.environ.get("NETVISION_URL", "http://localhost:8000")
         self.client = NetVisionClient(base_url, username, password)
         self.metrics = NetVisionMetricsCollector(self.client)
 

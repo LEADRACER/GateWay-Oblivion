@@ -74,5 +74,17 @@ class EventBus:
             events = [e for e in events if e.event_type == event_type]
         return sorted(events, key=lambda e: e.timestamp, reverse=True)[:limit]
 
+    def dump(self) -> list:
+        return [e.model_dump() for e in self._history]
+
+    def restore(self, events: list) -> None:
+        restored = []
+        for item in events or []:
+            try:
+                restored.append(CanonicalEvent(**item))
+            except Exception:  # noqa: BLE001
+                continue
+        self._history = restored[-self._max_history:]
+
 
 event_bus = EventBus()

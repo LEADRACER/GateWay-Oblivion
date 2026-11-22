@@ -6,6 +6,7 @@ fetches scan results, devices, vulnerabilities, and topology data.
 """
 
 import json
+import os
 import time
 import logging
 from typing import Optional
@@ -21,14 +22,14 @@ class NetVisionClient:
 
     def __init__(
         self,
-        base_url: str = "http://localhost:8000",
-        username: str = "admin",
-        password: str = "netvision",
+        base_url: Optional[str] = None,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
         timeout: float = 30.0,
     ):
-        self.base_url = base_url.rstrip("/")
-        self.username = username
-        self.password = password
+        self.base_url = (base_url or os.environ.get("NETVISION_URL", "http://localhost:8000")).rstrip("/")
+        self.username = username or os.environ.get("NETVISION_USERNAME", "admin")
+        self.password = password or os.environ.get("NETVISION_PASSWORD", "netvision")
         self.timeout = timeout
         self._token: Optional[str] = None
         self._token_expires: float = 0.0

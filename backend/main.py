@@ -6,20 +6,23 @@ Phase 2: Recon Dashboard — NetVision Integration
 import asyncio
 import uuid
 import json
+import os
 import logging
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException, Response
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from services.netvision_client import NetVisionClient
 from services.ws_bridge import NetVisionWSBridge
-from services.vuln_service import vuln_store, VulnCreate, VulnPatch
-from services.operations_service import ops_store, ops_executor, OperationCreate, RUNBOOKS
-from services.intel_service import intel_store, ReportCreate
+from services.vuln_service import vuln_store, VulnCreate, VulnPatch, Vulnerability
+from services.operations_service import ops_store, ops_executor, OperationCreate, RUNBOOKS, Operation
+from services.intel_service import intel_store, ReportCreate, Report
+from services.persistence import persistence, dump_models
+from services.audit_log import audit_log
 from services.event_bus import event_bus
 from services.resilience import TTLCache, CircuitBreaker, HealthMonitor, CircuitOpen
 from services.centre_service import centre_service
@@ -268,6 +271,58 @@ class Store:
 store = Store()
 
 
+def _actor(request: Request) -> str:
+    return request.headers.get("X-Operator") or "operator"
+
+
+def restore_snapshot() -> bool:
+    """Restore persisted stores on boot. Returns True when targets were restored."""
+    targets = persistence.load("targets")
+    if targets:
+        store.targets = {k: Target(**v) for k, v in targets.items()}
+    campaigns = persistence.load("campaigns")
+    if campaigns:
+        store.campaigns = {k: Campaign(**v) for k, v in campaigns.items()}
+
+    vulns = persistence.load("vulnerabilities")
+    if vulns:
+        vuln_store._vulns = {k: Vulnerability(**v) for k, v in vulns.items()}
+    ops = persistence.load("operations")
+    if ops:
+        ops_store._operations = {k: Operation(**v) for k, v in ops.items()}
+    reports = persistence.load("reports")
+    if reports:
+        intel_store._reports = {k: Report(**v) for k, v in reports.items()}
+
+    pipelines = persistence.load("pipelines")
+    if pipelines:
+        pipeline_service.pipelines = {k: Pipeline(**v) for k, v in pipelines.items()}
+    runs = persistence.load("pipeline_runs")
+    if runs:
+        pipeline_service.runs = {k: PipelineRun(**v) for k, v in runs.items()}
+
+    events = persistence.load("events")
+    if events:
+        event_bus.restore(events)
+    logger.info("Persistence snapshot restored (%d events, %d targets)",
+                len(events or []), len(targets or {}))
+    return bool(targets)
+
+
+async def persist_snapshot() -> None:
+    """Write all stores + event history atomically."""
+    await asyncio.gather(
+        persistence.save("targets", dump_models(store.targets)),
+        persistence.save("campaigns", dump_models(store.campaigns)),
+        persistence.save("vulnerabilities", dump_models(vuln_store._vulns)),
+        persistence.save("operations", dump_models(ops_store._operations)),
+        persistence.save("reports", dump_models(intel_store._reports)),
+        persistence.save("pipelines", dump_models(pipeline_service.pipelines)),
+        persistence.save("pipeline_runs", dump_models(pipeline_service.runs)),
+        persistence.save("events", event_bus.dump()),
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════
 # WebSocket Connection Manager
 # ═══════════════════════════════════════════════════════════════════
@@ -307,12 +362,15 @@ async def lifespan(app: FastAPI):
     global nv_client, nv_ws_bridge, health_monitor
 
     register_default_adapters()
+    restored = restore_snapshot()
     health_monitor = HealthMonitor(registry, interval=30.0)
     await health_monitor.start()
     await health_monitor.check_all(force=True)
 
     nv_client = NetVisionClient()
-    nv_ws_bridge = NetVisionWSBridge()
+    nv_ws_bridge = NetVisionWSBridge(
+        url=os.environ.get("NETVISION_WS_URL", "ws://localhost:8000/ws")
+    )
 
     async def _netvision_event(data: dict):
         """Normalize NetVision's typed WebSocket events onto Oblivion's bus."""
@@ -341,8 +399,9 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("NetVision not reachable: %s (recon will show offline)", e)
 
-    # Seed demo targets
-    _seed_data()
+    # Seed demo targets only on a fresh data directory
+    if not restored:
+        _seed_data()
 
     # Heartbeat for WS
     async def heartbeat():
@@ -353,9 +412,23 @@ async def lifespan(app: FastAPI):
                 "netvision_connected": nv_ws_bridge.is_connected if nv_ws_bridge else False,
             })
 
+    async def persist_loop():
+        while True:
+            await asyncio.sleep(30)
+            try:
+                await persist_snapshot()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Periodic persistence failed: %s", exc)
+
+    persist_task = asyncio.create_task(persist_loop())
     task = asyncio.create_task(heartbeat())
     yield
     task.cancel()
+    persist_task.cancel()
+    try:
+        await persist_snapshot()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Final persistence flush failed: %s", exc)
     if health_monitor:
         await health_monitor.stop()
     for name in registry.list():
@@ -1154,7 +1227,7 @@ class ToolExecuteRequest(BaseModel):
 
 
 @app.post("/api/tools/{tool}/execute")
-async def execute_tool(tool: str, req: ToolExecuteRequest, response: Response):
+async def execute_tool(tool: str, req: ToolExecuteRequest, response: Response, request: Request):
     adapter = get_adapter(tool)
     if adapter is None:
         raise HTTPException(404, f"Unknown tool: {tool}")
@@ -1214,6 +1287,16 @@ async def execute_tool(tool: str, req: ToolExecuteRequest, response: Response):
             },
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
+    target_value = req.target_ref or (req.params or {}).get("target")
+    await audit_log.append(
+        actor=_actor(request),
+        action=f"tool.{tool}.{req.action}",
+        target=str(target_value) if target_value else None,
+        side="red" if tool in ("metasploit", "reconng", "netvision") else "blue",
+        resource=tool,
+        result={"cached": cached, "status": "ok"},
+        metadata={"correlation_id": req.correlation_id},
+    )
     return {"tool": tool, "action": req.action, "result": result, "cached": cached}
 
 
@@ -1334,11 +1417,15 @@ async def delete_pipeline(pipeline_id: str):
 
 
 @app.post("/api/pipelines/{pipeline_id}/run")
-async def run_pipeline(pipeline_id: str):
+async def run_pipeline(request: Request, pipeline_id: str):
     run = pipeline_service.create_run(pipeline_id=pipeline_id)
     if not run:
         raise HTTPException(404, "Pipeline not found")
     await pipeline_service.run(run.id)
+    await audit_log.append(
+        actor=_actor(request), action="pipeline.run", resource=pipeline_id,
+        side="red", result={"run_id": run.id, "status": run.status},
+    )
     return {"run_id": run.id, "status": run.status}
 
 
@@ -1351,20 +1438,28 @@ async def get_pipeline_run(run_id: str):
 
 
 @app.post("/api/pipelines/runs/{run_id}/approve")
-async def approve_pipeline_run(run_id: str):
+async def approve_pipeline_run(request: Request, run_id: str):
     run = pipeline_service.approve(run_id)
     if not run:
         raise HTTPException(404, "Pipeline run not found")
     if run.status == "running":
         await pipeline_service.run(run.id)
+    await audit_log.append(
+        actor=_actor(request), action="pipeline.approve", resource=run_id,
+        side="red", result={"status": run.status, "approved": True},
+    )
     return {"run_id": run.id, "status": run.status, "approved": True}
 
 
 @app.delete("/api/pipelines/runs/{run_id}")
-async def cancel_pipeline_run(run_id: str):
+async def cancel_pipeline_run(request: Request, run_id: str):
     run = pipeline_service.cancel(run_id)
     if not run:
         raise HTTPException(404, "Pipeline run not found")
+    await audit_log.append(
+        actor=_actor(request), action="pipeline.cancel", resource=run_id,
+        side="red", result={"status": run.status},
+    )
     return {"run_id": run.id, "status": run.status}
 
 
@@ -1392,6 +1487,30 @@ async def centre_detections(limit: int = Query(40)):
 @app.get("/api/centre/scope")
 async def centre_scope():
     return centre_service.scope_status()
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Tamper-evident Audit Log API
+# ═══════════════════════════════════════════════════════════════════
+
+@app.get("/api/audit")
+async def list_audit(
+    limit: int = Query(100),
+    actor: Optional[str] = Query(None),
+    action: Optional[str] = Query(None),
+):
+    return {"entries": audit_log.list(limit=limit, actor=actor, action=action)}
+
+
+@app.get("/api/audit/verify")
+async def verify_audit():
+    return audit_log.verify()
+
+
+@app.post("/api/persistence/flush")
+async def flush_persistence():
+    await persist_snapshot()
+    return {"saved": True, "data_dir": str(persistence.data_dir)}
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1448,7 +1567,7 @@ async def netvision_controls():
 
 
 @app.post("/api/netvision/control/{action}")
-async def netvision_control(action: str, params: dict = {}):
+async def netvision_control(request: Request, action: str, params: dict = {}):
     """Generic control surface for any NetVision adapter action."""
     adapter = get_adapter("netvision")
     if not adapter:
@@ -1459,6 +1578,14 @@ async def netvision_control(action: str, params: dict = {}):
         raise HTTPException(400, str(exc))
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(502, str(exc))
+    await audit_log.append(
+        actor=_actor(request),
+        action=f"netvision.control.{action}",
+        target=str(params.get("target")) if params.get("target") else None,
+        side="red" if action in ("sonar_scan", "trigger_scan", "bettercap_start") else "blue",
+        resource="netvision",
+        result={"status": "ok"},
+    )
     await event_bus.emit(
         source_tool="netvision",
         event_type=f"netvision.control.{action}",

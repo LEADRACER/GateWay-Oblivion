@@ -100,3 +100,22 @@ export function useCentreDetections(limit = 40) {
     refetchInterval: 10_000,
   });
 }
+
+export interface AuditStatus {
+  valid: boolean;
+  entries: number;
+  broken_at: number | null;
+  reason: string | null;
+}
+
+export function useAuditStatus() {
+  return useQuery({
+    queryKey: ['audit', 'verify'],
+    queryFn: async (): Promise<AuditStatus> => {
+      const res = await fetch(`${API_BASE}/api/audit/verify`);
+      if (!res.ok) throw new Error('Failed to verify audit chain');
+      return res.json();
+    },
+    refetchInterval: 15_000,
+  });
+}

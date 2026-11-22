@@ -7,6 +7,7 @@ import {
   useCentreOverview,
   useCentreTimeline,
   useCentreDetections,
+  useAuditStatus,
   type Side,
   type CentreEvent,
   type CentreDetection,
@@ -38,6 +39,7 @@ export default function CentrePage() {
   const { data: overview } = useCentreOverview();
   const { data: events = [] } = useCentreTimeline(side);
   const { data: detections = [] } = useCentreDetections();
+  const { data: audit } = useAuditStatus();
   const { data: pipelines = [] } = usePipelines();
   const runPipeline = useRunPipeline();
   const approveRun = useApprovePipelineRun();
@@ -61,6 +63,9 @@ export default function CentrePage() {
               Operations Centre
             </h1>
             <Badge variant="accent">RED ⇄ BLUE</Badge>
+            <Badge variant={audit?.valid ? 'success' : 'danger'}>
+              AUDIT {audit?.valid ? 'VERIFIED' : 'INVALID'} · {audit?.entries ?? 0}
+            </Badge>
           </div>
           <p className="font-mono text-[10px] tracking-widest text-text-dim mt-1">
             Unified offensive &amp; defensive command surface ·{' '}

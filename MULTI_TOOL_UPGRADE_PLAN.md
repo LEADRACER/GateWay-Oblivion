@@ -298,6 +298,18 @@ actions are cached (`X-Cache: HIT|MISS`).
 still completes under the concurrent runner.
 | **5** | Safety & persistence: scope allowlist, audit log, credential vault, Supabase/Postgres migration | 2 wk | Hardened ops |
 
+**Phase 5 status (2026-11-22): ✅ CORE IMPLEMENTED (file-backed)** — `backend/services/persistence.py`
+atomically snapshots targets, campaigns, vulnerabilities, operations, reports, pipelines, runs and
+event history to `OBLIVION_DATA_DIR` (default `backend/data`); restored on boot and flushed every
+30s + on shutdown. `backend/services/audit_log.py` provides an append-only SHA-256 hash-chained
+audit trail (`/api/audit`, `/api/audit/verify`), written immediately for tool executions, NetVision
+controls and pipeline run/approve/cancel, with actor from the `X-Operator` header. Offensive targets
+are checked against `OBLIVION_SCOPE`. NetVision/Obsidian credentials move to environment variables
+(`backend/.env.example`). *Verified:* snapshot restore across restart (targets/events preserved),
+hash-chain tamper detection, 5 unit tests, full `npm run build`.
+*Remaining:* database-backed migration (Postgres/Supabase) and a true secret manager/vault; current
+persistence is local JSON/JSONL and credentials are env-based, not vaulted.
+
 ---
 
 ## 7. Risks & Mitigations

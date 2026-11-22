@@ -307,8 +307,17 @@ controls and pipeline run/approve/cancel, with actor from the `X-Operator` heade
 are checked against `OBLIVION_SCOPE`. NetVision/Obsidian credentials move to environment variables
 (`backend/.env.example`). *Verified:* snapshot restore across restart (targets/events preserved),
 hash-chain tamper detection, 5 unit tests, full `npm run build`.
-*Remaining:* database-backed migration (Postgres/Supabase) and a true secret manager/vault; current
-persistence is local JSON/JSONL and credentials are env-based, not vaulted.
+*Remaining by design:* no remote database (local SQLite is the intended storage model); a proper
+secret manager/vault for credentials is still optional.
+
+**2026-11-22 update — embedded SQLite (no remote DB):** `backend/services/local_db.py` replaces
+the JSON files with a single ACID SQLite database in WAL mode (`OBLIVION_DB_PATH`, default
+`backend/data/oblivion.db`). Snapshots, canonical events and the hash-chained audit log live in
+one file with checksums, `PRAGMA integrity_check`, local timestamped backups and `VACUUM`. Legacy
+JSON/JSONL data is imported automatically on first run. New endpoints: `GET /api/persistence/stats`,
+`POST /api/persistence/backup`, `GET /api/persistence/backups`, `POST /api/persistence/vacuum`.
+*Verified live:* integrity `ok`, WAL mode, 8 snapshots + 1 audit entry migrated, backup created,
+restore across restart, 6 unit tests passing. No remote database is required.
 
 ---
 

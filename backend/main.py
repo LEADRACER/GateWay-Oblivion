@@ -23,6 +23,7 @@ from services.operations_service import ops_store, ops_executor, OperationCreate
 from services.intel_service import intel_store, ReportCreate, Report
 from services.persistence import persistence, dump_models
 from services.audit_log import audit_log
+from services.local_db import local_db
 from services.event_bus import event_bus
 from services.resilience import TTLCache, CircuitBreaker, HealthMonitor, CircuitOpen
 from services.centre_service import centre_service
@@ -1511,6 +1512,27 @@ async def verify_audit():
 async def flush_persistence():
     await persist_snapshot()
     return {"saved": True, "data_dir": str(persistence.data_dir)}
+
+
+@app.get("/api/persistence/stats")
+async def persistence_stats():
+    return local_db.integrity()
+
+
+@app.post("/api/persistence/backup")
+async def persistence_backup():
+    return local_db.backup()
+
+
+@app.get("/api/persistence/backups")
+async def persistence_backups():
+    return {"backups": local_db.list_backups()}
+
+
+@app.post("/api/persistence/vacuum")
+async def persistence_vacuum():
+    local_db.vacuum()
+    return {"ok": True}
 
 
 # ═══════════════════════════════════════════════════════════════════

@@ -22,6 +22,7 @@ from services.operations_service import ops_store, ops_executor, OperationCreate
 from services.intel_service import intel_store, ReportCreate
 from services.event_bus import event_bus
 from services.resilience import TTLCache, CircuitBreaker, HealthMonitor, CircuitOpen
+from services.centre_service import centre_service
 from models.canonical import CanonicalEvent, canonical_event
 from adapters import (
     AdapterRegistry,
@@ -1158,6 +1159,14 @@ async def execute_tool(tool: str, req: ToolExecuteRequest, response: Response):
     if adapter is None:
         raise HTTPException(404, f"Unknown tool: {tool}")
 
+    # Red-team guardrail: block offensive actions against out-of-scope targets.
+    if tool in ("metasploit", "reconng", "netvision") and req.action in (
+        "run_module", "trigger_scan", "sonar_scan",
+    ):
+        target = req.target_ref or (req.params or {}).get("target")
+        if not centre_service.target_allowed(target):
+            raise HTTPException(403, "Target is outside the configured OBLIVION_SCOPE allowlist")
+
     breaker = health_monitor.breaker(tool) if health_monitor else CircuitBreaker(tool)
     cacheable = req.action in CACHEABLE_ACTIONS
     cache_key = exec_cache.make_key(tool, req.action, req.params or {})
@@ -1357,6 +1366,32 @@ async def cancel_pipeline_run(run_id: str):
     if not run:
         raise HTTPException(404, "Pipeline run not found")
     return {"run_id": run.id, "status": run.status}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Unified Red / Blue Operations Centre API
+# ═══════════════════════════════════════════════════════════════════
+
+@app.get("/api/centre/overview")
+async def centre_overview():
+    return await centre_service.overview(vuln_store, ops_store)
+
+
+@app.get("/api/centre/timeline")
+async def centre_timeline(side: str = Query("all"), limit: int = Query(60)):
+    if side not in ("all", "red", "blue"):
+        raise HTTPException(400, "side must be all, red or blue")
+    return {"events": await centre_service.timeline(side=side, limit=limit)}
+
+
+@app.get("/api/centre/detections")
+async def centre_detections(limit: int = Query(40)):
+    return {"detections": await centre_service.detections(limit=limit)}
+
+
+@app.get("/api/centre/scope")
+async def centre_scope():
+    return centre_service.scope_status()
 
 
 # ═══════════════════════════════════════════════════════════════════

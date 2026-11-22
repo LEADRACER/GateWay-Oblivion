@@ -14,6 +14,11 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   {
+    label: 'Operations Centre',
+    href: '/centre',
+    icon: <ChipIcon />,
+  },
+  {
     label: 'Overview',
     href: '/',
     icon: <GridIcon />,

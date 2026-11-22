@@ -364,6 +364,18 @@ def register_builtin_pipelines(service: PipelineService) -> None:
         )
     )
 
+    service.register(
+        Pipeline(
+            name="OSINT Dossier",
+            description="Passive target profiling: username search → email/host harvest → attack surface",
+            steps=[
+                PipelineStep(id="s1", name="Username Search", tool="osint", action="username_search", params={"username": "target"}),
+                PipelineStep(id="s2", name="Domain Harvest", tool="osint", action="domain_harvest", params={"domain": "example.com"}, depends_on=["s1"]),
+                PipelineStep(id="s3", name="Attack Surface", tool="osint", action="attack_surface", params={"domain": "example.com"}, depends_on=["s2"]),
+            ],
+        )
+    )
+
 
 pipeline_service = PipelineService()
 register_builtin_pipelines(pipeline_service)

@@ -180,3 +180,11 @@ with a clear message), and emits canonical events through the existing bus. The 
 `Web Vuln Sweep` runbook chains subfinder → httpx → katana → gated nuclei. Tool health now reports
 per-binary availability and the Centre classifies its events as red. Verified: existing
 Metasploit/NetVision/Centre endpoints unchanged, 10 unit tests passing.
+
+### 2026-11-22 — Tier 1b implemented
+`backend/adapters/osint.py` is registered as the 7th tool with 6 actions (`tools`, `version`,
+`username_search`, `domain_harvest`, `attack_surface`, `spiderfoot_scan`) covering Sherlock, Maigret,
+theHarvester, Amass and SpiderFoot CLI. Missing binaries degrade to HTTP 503 with clear hints;
+`SPIDERFOOT_PATH` can point at `sf.py`. New built-in `OSINT Dossier` runbook chains username search
+→ domain harvest → attack surface. OSINT events classify as blue in the Centre; `/osint` shows
+toolchain readiness. Verified: 15 unit tests, existing tools/pipelines/audit unchanged.

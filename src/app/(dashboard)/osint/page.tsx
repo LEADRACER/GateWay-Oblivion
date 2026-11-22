@@ -8,6 +8,7 @@ import {
   useThreats,
 } from '@/hooks/useIntelligence';
 import { StatCard, Badge } from '@/components/ui/primitives';
+import { useTools } from '@/hooks/useTools';
 
 const SEVERITY_COLORS: Record<string, string> = {
   critical: 'text-danger',
@@ -20,6 +21,7 @@ export default function OSINTPage() {
   const { data: overview } = useOsint();
   const { data: threats = [] } = useThreats();
   const { data: summary } = useIntelSummary();
+  const { data: tools = [] } = useTools();
 
   const sources = overview?.sources ?? [];
   const liveSources = sources.filter((s) => s.status === 'live').length;
@@ -51,6 +53,26 @@ export default function OSINTPage() {
         <StatCard label="Threats" value={threats.length} accent="accent" />
         <StatCard label="Critical" value={criticalCount} accent="danger" />
         <StatCard label="Live Sources" value={`${liveSources}/${sources.length || 0}`} accent="info" />
+      </div>
+
+      {/* ── Toolchain readiness ───────────────── */}
+      <div className="mb-6">
+        <h2 className="font-mono text-[10px] tracking-widest text-text-dim uppercase mb-3">
+          OSINT Toolchain
+        </h2>
+        <div className="grid grid-cols-4 gap-3">
+          {tools.filter((tool) => ['osint', 'projectdiscovery', 'godseye', 'reconng'].includes(tool.name)).map((tool) => (
+            <div key={tool.name} className="p-3 border border-border bg-surface flex items-center justify-between">
+              <div>
+                <div className="font-mono text-[10px] text-text uppercase">{tool.name}</div>
+                <div className="font-mono text-[8px] text-text-dim mt-0.5">{tool.actions.length} ACTIONS</div>
+              </div>
+              <Badge variant={tool.status === 'available' ? 'success' : 'danger'}>
+                {tool.status === 'available' ? 'READY' : 'OFFLINE'}
+              </Badge>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="grid grid-cols-[1fr_1fr] gap-6">

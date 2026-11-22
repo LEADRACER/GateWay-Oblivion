@@ -18,6 +18,7 @@ try:
     from adapters.obsidian import ObsidianAdapter
     from adapters.projectdiscovery import ProjectDiscoveryAdapter
     from adapters.osint import OSINTAdapter
+    from adapters.blueteam import BlueTeamAdapter
 except ImportError:
     from backend.adapters.base import ToolAdapter
     from backend.adapters.netvision import NetVisionAdapter
@@ -27,6 +28,7 @@ except ImportError:
     from backend.adapters.obsidian import ObsidianAdapter
     from backend.adapters.projectdiscovery import ProjectDiscoveryAdapter
     from backend.adapters.osint import OSINTAdapter
+    from backend.adapters.blueteam import BlueTeamAdapter
 
 
 class AdapterRegistry:
@@ -80,6 +82,7 @@ def register_default_adapters() -> dict:
     registry.register(ObsidianAdapter())
     registry.register(ProjectDiscoveryAdapter())
     registry.register(OSINTAdapter())
+    registry.register(BlueTeamAdapter())
     return registry.adapters
 
 

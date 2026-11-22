@@ -31,6 +31,7 @@ export interface CentreOverview {
     high_vulns: number;
     operations_success_rate: number;
     capture_available: boolean;
+    blue_sources: Record<string, boolean>;
   };
   shared: {
     events_total: number;

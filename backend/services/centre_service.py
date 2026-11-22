@@ -18,7 +18,7 @@ from adapters import get_adapter
 logger = logging.getLogger("oblivion.centre")
 
 RED_TOOLS = {"metasploit", "reconng", "projectdiscovery"}
-BLUE_TOOLS = {"godseye", "system", "obsidian", "osint"}
+BLUE_TOOLS = {"godseye", "system", "obsidian", "osint", "blueteam"}
 BLUE_MARKERS = ("alert", "anomal", "capture", "rogue", "health.alert", "threat", "intel", "detection")
 
 
@@ -114,6 +114,32 @@ class CentreService:
                 except Exception as exc:  # noqa: BLE001
                     logger.debug("Centre detection source %s unavailable: %s", action, exc)
 
+        blue_adapter = get_adapter("blueteam")
+        if blue_adapter:
+            for action, key, source in (
+                ("wazuh_alerts", "alerts", "wazuh"),
+                ("suricata_alerts", "alerts", "suricata"),
+                ("zeek_notices", "notices", "zeek"),
+            ):
+                try:
+                    result = await blue_adapter.execute(action)
+                    rows = result.get(key, []) if isinstance(result, dict) else []
+                    for row in rows[:10]:
+                        severity = str(row.get("severity", "warning")).lower()
+                        if severity.isdigit():
+                            severity = "high" if int(severity) >= 10 else "medium"
+                        items.append({
+                            "id": f"{source}-{row.get('id') or row.get('title') or len(items)}",
+                            "title": str(row.get("title") or "Detection"),
+                            "severity": severity,
+                            "source": source,
+                            "event_type": action,
+                            "timestamp": str(row.get("timestamp") or ""),
+                            "detail": str(row.get("source_ip") or row.get("rule_id") or source),
+                        })
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("Centre blue source %s unavailable: %s", action, exc)
+
         return sorted(items, key=lambda d: d.get("timestamp", ""), reverse=True)[:limit]
 
     # ── unified overview ─────────────────────────────────────────
@@ -164,6 +190,7 @@ class CentreService:
                 (ops.get("completed", 0) / max(ops.get("total", 1), 1)) * 100, 1
             ),
             "capture_available": bool((tools.get("netvision") or {}).get("available")),
+            "blue_sources": dict((tools.get("blueteam") or {}).get("subsystems", {})),
         }
 
         return {

@@ -192,6 +192,18 @@ export default function CentrePage() {
             <MiniStat label="Ops Success" value={`${blue?.operations_success_rate ?? 0}%`} />
             <MiniStat label="Critical Alerts" value={String(blue?.critical_detections ?? 0)} />
           </div>
+          <div className="flex flex-wrap gap-1.5 mb-3">
+            {Object.entries(blue?.blue_sources ?? {}).map(([name, ready]) => (
+              <span
+                key={name}
+                className={`font-mono text-[8px] tracking-widest uppercase border px-2 py-0.5 ${
+                  ready ? 'border-accent/40 text-accent' : 'border-border text-text-dim'
+                }`}
+              >
+                {name} {ready ? 'ON' : 'OFF'}
+              </span>
+            ))}
+          </div>
           <div className="space-y-1 max-h-[400px] overflow-y-auto pr-1">
             {detections.length === 0 && (
               <div className="p-3 border border-border font-mono text-[9px] text-text-dim">NO ACTIVE DETECTIONS</div>

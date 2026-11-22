@@ -1,0 +1,12 @@
+title: Failed SSH Authentication
+id: oblivion-ssh-fail-001
+level: medium
+logsource:
+  category: authentication
+detection:
+  selection:
+    event_type: ssh.failed
+  condition: selection
+fields:
+  - source_ip
+  - username

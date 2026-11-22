@@ -42,6 +42,7 @@ from adapters.godseye import GodsEyeAdapter  # noqa: F401
 from adapters.obsidian import ObsidianAdapter  # noqa: F401
 from adapters.projectdiscovery import ProjectDiscoveryAdapter  # noqa: F401
 from adapters.osint import OSINTAdapter  # noqa: F401
+from adapters.blueteam import BlueTeamAdapter  # noqa: F401
 from services.obsidian_service import obsidian_service
 
 logger = logging.getLogger("oblivion")

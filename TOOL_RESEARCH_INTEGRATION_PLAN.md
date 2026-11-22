@@ -188,3 +188,11 @@ theHarvester, Amass and SpiderFoot CLI. Missing binaries degrade to HTTP 503 wit
 `SPIDERFOOT_PATH` can point at `sf.py`. New built-in `OSINT Dossier` runbook chains username search
 → domain harvest → attack surface. OSINT events classify as blue in the Centre; `/osint` shows
 toolchain readiness. Verified: 15 unit tests, existing tools/pipelines/audit unchanged.
+
+### 2026-11-22 — Tier 2 implemented
+`backend/adapters/blueteam.py` is registered as the 8th tool with 10 actions covering Wazuh REST
+API, Suricata EVE JSON, Zeek notice logs, Sigma rule matching, YARA scanning, TheHive cases and
+MISP IOCs. Each subsystem is independently configured and reported in tool health; the Centre
+merges Wazuh/Suricata/Zeek detections into the blue feed and shows per-source ON/OFF badges.
+Example Sigma/YARA rules are included in `backend/rules/`. Verified: 19 unit tests, centre
+detections live, all existing endpoints unchanged.

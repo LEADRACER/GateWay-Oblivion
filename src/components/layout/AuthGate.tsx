@@ -6,12 +6,18 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 
+const AUTH_CONFIGURED =
+  !!process.env.NEXT_PUBLIC_SUPABASE_URL && !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
 export function AuthGate({ children }: { children: React.ReactNode }) {
-  const [loading, setLoading] = useState(true);
-  const [authenticated, setAuthenticated] = useState(false);
+  const [loading, setLoading] = useState(!AUTH_CONFIGURED);
+  const [authenticated, setAuthenticated] = useState(AUTH_CONFIGURED);
   const router = useRouter();
 
   useEffect(() => {
+    // Local mode: no Supabase configured — render the console directly.
+    if (!AUTH_CONFIGURED) return;
+
     const supabase = createClient();
 
     supabase.auth.getUser().then(({ data: { user } }) => {

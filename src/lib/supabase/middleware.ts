@@ -6,7 +6,9 @@ import { NextResponse, type NextRequest } from 'next/server';
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
 
-  // Local mode: skip the auth gate when Supabase is not configured.
+  // Server onboarding mode: only activate the Supabase auth gate when the
+  // operator explicitly configures it (bigger-network deployments). Local-only
+  // installs skip auth entirely.
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!supabaseUrl || !supabaseAnonKey) {

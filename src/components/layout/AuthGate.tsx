@@ -15,7 +15,8 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   const router = useRouter();
 
   useEffect(() => {
-    // Local mode: no Supabase configured — render the console directly.
+    // Server onboarding: only run the Supabase auth gate when configured.
+    // Local-only installs render the console directly.
     if (!AUTH_CONFIGURED) return;
 
     const supabase = createClient();

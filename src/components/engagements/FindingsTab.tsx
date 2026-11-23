@@ -26,7 +26,7 @@ export function FindingsTab({ engagement }: { engagement: Engagement }) {
             <XAxis dataKey="severity" stroke="#4a4d54" tick={{ fontSize: 9 }} />
             <YAxis stroke="#4a4d54" tick={{ fontSize: 9 }} allowDecimals={false} />
             <Tooltip contentStyle={{ background: '#0d0e10', border: '1px solid #1e2024', fontSize: 10 }} />
-            <Bar dataKey="count" fill="#f87171" />
+            <Bar dataKey="count" fill="#c07468" />
           </BarChart>
         </ResponsiveContainer>
       </div>

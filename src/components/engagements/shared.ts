@@ -6,22 +6,22 @@ export function formatTime(value?: string | null): string {
 
 export function stateColor(state: string): string {
   switch (state) {
-    case 'active': return '#5ee28a';
-    case 'authorized': return '#60a5fa';
-    case 'paused': return '#fbbf24';
-    case 'aborted': return '#f87171';
-    case 'completed': return '#a78bfa';
-    case 'cancelled': return '#6b7280';
-    default: return '#6b6e74';
+    case 'active': return 'var(--color-accent)';
+    case 'authorized': return 'var(--color-info)';
+    case 'paused': return 'var(--color-warning)';
+    case 'aborted': return 'var(--color-danger)';
+    case 'completed': return 'var(--color-text-muted)';
+    case 'cancelled': return 'var(--color-text-dim)';
+    default: return 'var(--color-text-dim)';
   }
 }
 
 export function severityColor(severity: string): string {
   switch (severity) {
-    case 'critical': return '#f87171';
-    case 'high': return '#fbbf24';
-    case 'medium': return '#60a5fa';
-    case 'low': return '#5ee28a';
-    default: return '#6b6e74';
+    case 'critical': return 'var(--color-sev-critical)';
+    case 'high': return 'var(--color-sev-high)';
+    case 'medium': return 'var(--color-sev-medium)';
+    case 'low': return 'var(--color-sev-low)';
+    default: return 'var(--color-sev-info)';
   }
 }

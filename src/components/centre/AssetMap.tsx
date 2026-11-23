@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts';
 import type { CentreAssets } from '@/hooks/useCentre';
 
-const VENDOR_COLORS = ['#5ee28a', '#60a5fa', '#fbbf24', '#f87171', '#a78bfa', '#6b7280'];
+const VENDOR_COLORS = ['#6da07f', '#7086a3', '#c9a268', '#c07468', '#8a81a8', '#5f6267'];
 
 export function AssetMap({ assets }: { assets?: CentreAssets }) {
   const [selected, setSelected] = useState<string | null>(null);

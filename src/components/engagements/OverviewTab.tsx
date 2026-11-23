@@ -16,12 +16,12 @@ export function OverviewTab({ engagement }: { engagement: Engagement }) {
     <div className="space-y-4">
       <KpiStrip
         kpis={[
-          { label: 'Progress', value: `${Math.round(metrics?.progress ?? 0)}%`, color: '#5ee28a' },
-          { label: 'Tasks', value: metrics?.tasks_total ?? 0, color: '#60a5fa', sub: `${metrics?.task_status?.done ?? 0} done` },
-          { label: 'Findings', value: metrics?.findings_total ?? 0, color: '#f87171', sub: `${metrics?.findings_by_severity?.critical ?? 0} critical` },
-          { label: 'Evidence', value: metrics?.evidence_count ?? 0, color: '#fbbf24' },
-          { label: 'Events', value: metrics?.events_count ?? 0, color: '#a78bfa' },
-          { label: 'Risk', value: metrics?.risk_score ?? 0, color: '#5ee28a' },
+          { label: 'Progress', value: `${Math.round(metrics?.progress ?? 0)}%`, color: 'var(--color-accent)' },
+          { label: 'Tasks', value: metrics?.tasks_total ?? 0, color: 'var(--color-info)', sub: `${metrics?.task_status?.done ?? 0} done` },
+          { label: 'Findings', value: metrics?.findings_total ?? 0, color: 'var(--color-danger)', sub: `${metrics?.findings_by_severity?.critical ?? 0} critical` },
+          { label: 'Evidence', value: metrics?.evidence_count ?? 0, color: 'var(--color-warning)' },
+          { label: 'Events', value: metrics?.events_count ?? 0, color: 'var(--color-info)' },
+          { label: 'Risk', value: metrics?.risk_score ?? 0, color: 'var(--color-accent)' },
         ]}
       />
 

@@ -114,12 +114,12 @@ export default function CentrePage() {
       {/* ── KPI strip ─────────────────────────────────────────── */}
       <KpiStrip
         kpis={[
-          { label: 'Attack Surface', value: red?.attack_surface ?? '…', color: '#5ee28a', sub: 'discovered hosts' },
-          { label: 'Critical Vulns', value: blue?.critical_vulns ?? '…', color: '#f87171', sub: `${blue?.high_vulns ?? 0} high` },
-          { label: 'Exploits Ready', value: red?.exploits_available ?? '…', color: '#f87171', sub: 'weaponized paths' },
-          { label: 'Pipelines', value: red?.pipelines_total ?? '…', color: '#60a5fa', sub: `${red?.gated_runs ?? 0} gated` },
-          { label: 'Detections', value: blue?.detections_total ?? '…', color: '#fbbf24', sub: `${blue?.critical_detections ?? 0} critical` },
-          { label: 'Posture', value: blue?.posture_score ?? '…', color: (blue?.posture_score ?? 0) >= 70 ? '#5ee28a' : '#fbbf24', sub: '/ 100' },
+          { label: 'Attack Surface', value: red?.attack_surface ?? '…', color: 'var(--color-accent)', sub: 'discovered hosts' },
+          { label: 'Critical Vulns', value: blue?.critical_vulns ?? '…', color: 'var(--color-danger)', sub: `${blue?.high_vulns ?? 0} high` },
+          { label: 'Exploits Ready', value: red?.exploits_available ?? '…', color: 'var(--color-danger)', sub: 'weaponized paths' },
+          { label: 'Pipelines', value: red?.pipelines_total ?? '…', color: 'var(--color-info)', sub: `${red?.gated_runs ?? 0} gated` },
+          { label: 'Detections', value: blue?.detections_total ?? '…', color: 'var(--color-warning)', sub: `${blue?.critical_detections ?? 0} critical` },
+          { label: 'Posture', value: blue?.posture_score ?? '…', color: (blue?.posture_score ?? 0) >= 70 ? 'var(--color-accent)' : 'var(--color-warning)', sub: '/ 100' },
         ]}
       />
 

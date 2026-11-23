@@ -7,13 +7,13 @@ import {
 import type { CentreMetrics } from '@/hooks/useCentre';
 
 const COLORS: Record<string, string> = {
-  red: '#f87171',
-  blue: '#60a5fa',
-  shared: '#6b7280',
-  critical: '#f87171',
-  high: '#fbbf24',
-  warning: '#fbbf24',
-  info: '#5ee28a',
+  red: '#c07468',
+  blue: '#7086a3',
+  shared: '#5f6267',
+  critical: '#c07468',
+  high: '#c9a268',
+  warning: '#c9a268',
+  info: '#6da07f',
 };
 
 export function ActivityCharts({ metrics }: { metrics?: CentreMetrics }) {
@@ -65,7 +65,7 @@ export function ActivityCharts({ metrics }: { metrics?: CentreMetrics }) {
               <Pie data={sides} dataKey="value" nameKey="name" innerRadius={45} outerRadius={70}
                    stroke="none" paddingAngle={2}>
                 {sides.map((entry) => (
-                  <Cell key={entry.name} fill={COLORS[entry.name] ?? '#6b7280'} />
+                  <Cell key={entry.name} fill={COLORS[entry.name] ?? '#5f6267'} />
                 ))}
               </Pie>
               <Tooltip contentStyle={{ background: '#0d0e10', border: '1px solid #1e2024', fontSize: 10 }} />

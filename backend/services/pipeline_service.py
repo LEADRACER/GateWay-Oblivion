@@ -24,6 +24,15 @@ from adapters import get_adapter
 
 logger = logging.getLogger("oblivion.pipeline")
 
+# Optional engagement integration hooks, wired by main.py at startup.
+# They are None by default so existing pipelines behave exactly as before.
+engagement_guard = None       # (engagement_id, tool, action, params, target) -> None
+on_step_start = None          # (run, step) -> task_id | None
+on_step_complete = None       # (run, step, result) -> None
+engagement_approval_check = None  # (engagement_id, action, target) -> bool
+engagement_event_recorder = None  # (canonical_event) -> None
+
+
 
 # ── Pydantic Models ─────────────────────────────────────────────────
 
@@ -39,9 +48,18 @@ class PipelineStepBase(BaseModel):
 
 
 class PipelineStep(PipelineStepBase):
+    id: str
+    name: str
+    tool: str
+    action: str
+    params: dict = Field(default_factory=dict)
+    depends_on: list = Field(default_factory=list)
+    condition: str | None = None
+    gate: bool = False
     status: str = "pending"
     result: Optional[dict] = None
     error: Optional[str] = None
+    task_id: Optional[str] = None
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
 
@@ -69,6 +87,9 @@ class PipelineRun(BaseModel):
     approved: bool = False
     target_ref: Optional[str] = None
     correlation_id: Optional[str] = None
+    engagement_id: Optional[str] = None
+    gated_reason: Optional[str] = None
+    required_approval_action: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
@@ -158,6 +179,7 @@ class PipelineService:
         target_ref: Optional[str] = None,
         correlation_id: Optional[str] = None,
         approved: bool = False,
+        engagement_id: Optional[str] = None,
     ) -> Optional[PipelineRun]:
         pipeline = self.pipelines.get(pipeline_id)
         if not pipeline:
@@ -168,6 +190,7 @@ class PipelineService:
             approved=approved,
             target_ref=target_ref,
             correlation_id=correlation_id,
+            engagement_id=engagement_id,
         )
         self.runs[run.id] = run
         return run
@@ -201,13 +224,25 @@ class PipelineService:
             return False
 
         try:
+            # Per-step engagement enforcement: scope, RoE, authorization, approval.
+            if run.engagement_id and engagement_guard is not None:
+                target = run.target_ref or step.params.get("target")
+                engagement_guard(run.engagement_id, step.tool, step.action, step.params, target)
+
+            # Link the step to a canonical engagement task.
+            if run.engagement_id and on_step_start is not None and not step.task_id:
+                step.task_id = on_step_start(run, step)
+
             result = await adapter.execute(step.action, step.params)
             step.status = "completed"
             step.result = result
             step.completed_at = _now()
             run.step_results[step.id] = result
 
-            await event_bus.emit(
+            if run.engagement_id and on_step_complete is not None:
+                on_step_complete(run, step, result)
+
+            event = await event_bus.emit(
                 source_tool=step.tool,
                 event_type=f"{step.tool}.{step.action}",
                 payload={"action": step.action, "params": step.params, "result": result, "pipeline": pipeline.name, "run_id": run.id},
@@ -215,7 +250,11 @@ class PipelineService:
                 title=f"{pipeline.name} — {step.name}",
                 target_ref=run.target_ref,
                 correlation_id=run.correlation_id,
+                engagement_id=run.engagement_id,
+                task_id=step.task_id,
             )
+            if run.engagement_id and engagement_event_recorder is not None:
+                engagement_event_recorder(event)
 
             if step.condition:
                 ok = _resolve_condition(step.condition, result if isinstance(result, dict) else {})
@@ -266,10 +305,21 @@ class PipelineService:
                 continue
 
             # Human gates halt execution of the whole level before any destructive action.
-            gated = [s for s in runnable if s.gate and not run.approved]
+            gated = []
+            for step in runnable:
+                if not step.gate or run.approved:
+                    continue
+                if run.engagement_id and engagement_approval_check is not None:
+                    target = run.target_ref or step.params.get("target")
+                    if not engagement_approval_check(run.engagement_id, step.action, target):
+                        gated.append(step)
+                else:
+                    gated.append(step)
             if gated:
                 run.status = "gated"
                 run.current_step = gated[0].id
+                run.gated_reason = "engagement-approval" if run.engagement_id else "hitl-gate"
+                run.required_approval_action = gated[0].action
                 run.completed_at = _now()
                 skipped.update(s.id for s in gated)
                 break

@@ -358,3 +358,12 @@ tool execution while preserving legacy `OBLIVION_SCOPE` behavior when the header
 *Verified live:* create → scope → RoE sign → authorized → active → task approval; out-of-scope
 target returns 403, destructive action without approval returns 403, in-scope action succeeds,
 no-header legacy call unchanged, audit chain valid, 4 unit tests passing.
+
+**2026-11-23 — Phases 3 + 4 implemented:** `PipelineRun` and `PipelineStep` gained engagement/task
+fields; the orchestrator now calls engagement hooks before each step (scope/RoE/approval guard),
+creates a canonical task per step, auto-creates findings from step results, tags canonical events with
+`engagement_id`/`task_id`, and requires engagement approval for gated steps. New endpoint
+`POST /api/engagements/{id}/pipelines/{pipeline_id}/run`; standard pipeline runs accept `X-Engagement`.
+Pipeline approval now resumes gated runs (bug fixed). *Verified live:* scoped runs complete, gated
+runs halt with `engagement-approval`, approval resumes and creates tasks, engagement metrics/events
+populate, audit chain valid, 6 unit tests passing.

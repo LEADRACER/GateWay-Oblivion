@@ -1393,6 +1393,73 @@ from services.pipeline_service import (
     pipeline_service,
     register_builtin_pipelines,
 )
+import services.pipeline_service as pipeline_module
+
+
+# ── Engagement ↔ pipeline hooks ───────────────────────────────────
+
+def _pipeline_guard(engagement_id, tool, action, params, target):
+    engagement_service.guard(engagement_id, tool, action, target, "pipeline")
+
+
+def _pipeline_task_start(run, step):
+    try:
+        task = engagement_service.add_task(run.engagement_id, {
+            "title": f"{run.pipeline_name} — {step.name}",
+            "tool": step.tool,
+            "action": step.action,
+            "params": step.params,
+            "gate": step.gate,
+            "pipeline_run_id": run.id,
+            "owner": "pipeline",
+        })
+        return task.id
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Engagement task creation failed: %s", exc)
+        return None
+
+
+def _pipeline_task_complete(run, step, result):
+    if not step.task_id:
+        return
+    try:
+        engagement_service.update_task(run.engagement_id, step.task_id, {
+            "status": "done", "pipeline_run_id": run.id,
+        })
+        rows = []
+        if isinstance(result, dict):
+            for key in ("findings", "vulnerabilities"):
+                value = result.get(key)
+                if isinstance(value, list):
+                    rows.extend(value)
+        for row in rows[:20]:
+            if not isinstance(row, dict):
+                continue
+            severity = str(row.get("severity") or "info").lower()
+            if severity not in ("critical", "high", "medium", "low", "info"):
+                severity = "info"
+            engagement_service.add_finding(run.engagement_id, {
+                "title": str(row.get("title") or row.get("name") or row.get("template") or "Pipeline finding"),
+                "severity": severity,
+                "cvss_score": row.get("cvss_score"),
+                "cve_id": row.get("cve_id"),
+                "source_tool": step.tool,
+                "task_id": step.task_id,
+                "raw": row,
+            })
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Engagement task completion hook failed: %s", exc)
+
+
+pipeline_module.engagement_guard = _pipeline_guard
+pipeline_module.on_step_start = _pipeline_task_start
+pipeline_module.on_step_complete = _pipeline_task_complete
+pipeline_module.engagement_approval_check = (
+    lambda engagement_id, action, target: engagement_service.has_approval(
+        engagement_id, action, target
+    )
+)
+pipeline_module.engagement_event_recorder = engagement_service.record_event
 
 
 class PipelineStepCreate(BaseModel):
@@ -1453,15 +1520,22 @@ async def delete_pipeline(pipeline_id: str):
 
 @app.post("/api/pipelines/{pipeline_id}/run")
 async def run_pipeline(request: Request, pipeline_id: str):
-    run = pipeline_service.create_run(pipeline_id=pipeline_id)
+    engagement_id = request.headers.get("X-Engagement")
+    if engagement_id:
+        try:
+            engagement_service.require_active(engagement_id, _actor(request))
+        except EngagementError as exc:
+            raise HTTPException(exc.code, str(exc))
+    run = pipeline_service.create_run(pipeline_id=pipeline_id, engagement_id=engagement_id)
     if not run:
         raise HTTPException(404, "Pipeline not found")
     await pipeline_service.run(run.id)
     await audit_log.append(
         actor=_actor(request), action="pipeline.run", resource=pipeline_id,
-        side="red", result={"run_id": run.id, "status": run.status},
+        side="red", target=engagement_id,
+        result={"run_id": run.id, "status": run.status, "engagement_id": engagement_id},
     )
-    return {"run_id": run.id, "status": run.status}
+    return {"run_id": run.id, "status": run.status, "engagement_id": engagement_id}
 
 
 @app.get("/api/pipelines/runs/{run_id}")
@@ -1474,16 +1548,29 @@ async def get_pipeline_run(run_id: str):
 
 @app.post("/api/pipelines/runs/{run_id}/approve")
 async def approve_pipeline_run(request: Request, run_id: str):
-    run = pipeline_service.approve(run_id)
+    run = pipeline_service.get_run(run_id)
     if not run:
         raise HTTPException(404, "Pipeline run not found")
-    if run.status == "running":
-        await pipeline_service.run(run.id)
+    if run.engagement_id and run.required_approval_action:
+        engagement_service.record_approval(
+            run.engagement_id,
+            run.required_approval_action,
+            str(run.target_ref or ""),
+            _actor(request),
+            "pipeline run approval",
+        )
+    approved = pipeline_service.approve(run_id)
+    if not approved:
+        raise HTTPException(404, "Pipeline run not found")
+    if approved.status in ("pending", "running"):
+        await pipeline_service.run(approved.id)
+        approved = pipeline_service.get_run(run_id) or approved
     await audit_log.append(
         actor=_actor(request), action="pipeline.approve", resource=run_id,
-        side="red", result={"status": run.status, "approved": True},
+        side="red", target=run.engagement_id,
+        result={"status": approved.status, "approved": True},
     )
-    return {"run_id": run.id, "status": run.status, "approved": True}
+    return {"run_id": approved.id, "status": approved.status, "approved": True}
 
 
 @app.delete("/api/pipelines/runs/{run_id}")
@@ -1713,6 +1800,25 @@ async def add_evidence(engagement_id: str, request: Request, data: dict):
 async def engagement_events(engagement_id: str, limit: int = Query(100)):
     _eng_or_404(engagement_id)
     return {"events": engagement_service.list_events(engagement_id, limit)}
+
+
+@app.post("/api/engagements/{engagement_id}/pipelines/{pipeline_id}/run")
+async def run_engagement_pipeline(
+    engagement_id: str, pipeline_id: str, request: Request
+):
+    try:
+        engagement_service.require_active(engagement_id, _actor(request))
+    except EngagementError as exc:
+        raise HTTPException(exc.code, str(exc))
+    run = pipeline_service.create_run(
+        pipeline_id=pipeline_id, engagement_id=engagement_id
+    )
+    if not run:
+        raise HTTPException(404, "Pipeline not found")
+    await pipeline_service.run(run.id)
+    await _eng_audit(request, "pipeline.run", engagement_id,
+                     {"pipeline_id": pipeline_id, "run_id": run.id, "status": run.status})
+    return {"run_id": run.id, "status": run.status, "engagement_id": engagement_id}
 
 
 @app.get("/api/engagements/{engagement_id}/metrics")

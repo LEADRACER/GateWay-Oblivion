@@ -160,6 +160,41 @@ class EngagementService:
     def abort(self, engagement_id: str, actor: str, reason: str) -> CanonicalEngagement:
         return self.transition(engagement_id, "aborted", actor, reason)
 
+    def require_active(self, engagement_id: str, actor: str = "operator") -> CanonicalEngagement:
+        """Lightweight state check for pipeline runs (no tool/action scope)."""
+        engagement = self.get_engagement(engagement_id)
+        if not engagement:
+            raise EngagementError("Engagement not found", 404)
+        if engagement.state != "active":
+            raise EngagementError(
+                f"Engagement is {engagement.state.upper()} — must be ACTIVE", 409
+            )
+        return engagement
+
+    def record_approval(self, engagement_id: str, action: str, target: str,
+                        actor: str, reason: str = "", decision: str = "approved") -> CanonicalApproval:
+        """Approval for a gated pipeline step (not tied to a specific task)."""
+        approval = CanonicalApproval(
+            id=self._id("appr"),
+            engagement_id=engagement_id,
+            requested_by="pipeline",
+            approved_by=actor,
+            action=action,
+            target=str(target or ""),
+            reason=reason,
+            decision=decision,
+        )
+        self._save("approval", approval)
+        return approval
+
+    def has_approval(self, engagement_id: str, action: str, target: str = "") -> bool:
+        return any(
+            a.get("decision") == "approved"
+            and a.get("action") == action
+            and (not a.get("target") or a.get("target") == str(target))
+            for a in self.db.list_entities("approval", engagement_id)
+        )
+
     # ── scope & RoE ──────────────────────────────────────────────
 
     def set_scope(self, engagement_id: str, data: dict) -> CanonicalScope:

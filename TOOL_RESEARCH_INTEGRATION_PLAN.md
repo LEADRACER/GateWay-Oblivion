@@ -196,3 +196,12 @@ MISP IOCs. Each subsystem is independently configured and reported in tool healt
 merges Wazuh/Suricata/Zeek detections into the blue feed and shows per-source ON/OFF badges.
 Example Sigma/YARA rules are included in `backend/rules/`. Verified: 19 unit tests, centre
 detections live, all existing endpoints unchanged.
+
+### 2026-11-23 — Tier 3 implemented (guardrails first)
+`backend/adapters/adversary.py` is registered as the 9th tool with 9 actions covering CALDERA,
+Atomic Red Team, BloodHound, Sliver/Mythic/Havoc and NetExec. **Safety by design:** read/list actions
+are always available; every mutating action requires `params.confirm == "ENGAGE"`, is registered in
+`MUTATING`, is scope-checked against `OBLIVION_SCOPE`, and is audited. C2 commands are restricted to
+read-only verbs unless explicitly overridden; `atomic_run` intentionally refuses implicit execution.
+Read-only `Emulation Readiness` runbook added. Verified: 23 unit tests, confirm guard returns HTTP
+503, all existing tools/centre/audit endpoints unchanged.

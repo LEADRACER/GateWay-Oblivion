@@ -7,6 +7,7 @@ from .obsidian import ObsidianAdapter
 from .projectdiscovery import ProjectDiscoveryAdapter
 from .osint import OSINTAdapter
 from .blueteam import BlueTeamAdapter
+from .adversary import AdversaryAdapter
 from .registry import AdapterRegistry, get_adapter, get_tool_names, register_default_adapters, registry
 
 __all__ = [
@@ -19,6 +20,7 @@ __all__ = [
     "ProjectDiscoveryAdapter",
     "OSINTAdapter",
     "BlueTeamAdapter",
+    "AdversaryAdapter",
     "AdapterRegistry",
     "get_adapter",
     "get_tool_names",

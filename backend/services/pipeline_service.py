@@ -376,6 +376,18 @@ def register_builtin_pipelines(service: PipelineService) -> None:
         )
     )
 
+    service.register(
+        Pipeline(
+            name="Emulation Readiness",
+            description="Read-only inventory: Atomic tests → Sigma rules → C2 binaries",
+            steps=[
+                PipelineStep(id="s1", name="Atomic Tests", tool="adversary", action="atomic_list", params={"limit": 20}),
+                PipelineStep(id="s2", name="Sigma Rules", tool="blueteam", action="status", params={}, depends_on=["s1"]),
+                PipelineStep(id="s3", name="C2 Status", tool="adversary", action="c2_status", params={}, depends_on=["s2"]),
+            ],
+        )
+    )
+
 
 pipeline_service = PipelineService()
 register_builtin_pipelines(pipeline_service)

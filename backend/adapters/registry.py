@@ -19,6 +19,7 @@ try:
     from adapters.projectdiscovery import ProjectDiscoveryAdapter
     from adapters.osint import OSINTAdapter
     from adapters.blueteam import BlueTeamAdapter
+    from adapters.adversary import AdversaryAdapter
 except ImportError:
     from backend.adapters.base import ToolAdapter
     from backend.adapters.netvision import NetVisionAdapter
@@ -29,6 +30,7 @@ except ImportError:
     from backend.adapters.projectdiscovery import ProjectDiscoveryAdapter
     from backend.adapters.osint import OSINTAdapter
     from backend.adapters.blueteam import BlueTeamAdapter
+    from backend.adapters.adversary import AdversaryAdapter
 
 
 class AdapterRegistry:
@@ -83,6 +85,7 @@ def register_default_adapters() -> dict:
     registry.register(ProjectDiscoveryAdapter())
     registry.register(OSINTAdapter())
     registry.register(BlueTeamAdapter())
+    registry.register(AdversaryAdapter())
     return registry.adapters
 
 

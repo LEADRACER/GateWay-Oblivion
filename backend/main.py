@@ -43,6 +43,7 @@ from adapters.obsidian import ObsidianAdapter  # noqa: F401
 from adapters.projectdiscovery import ProjectDiscoveryAdapter  # noqa: F401
 from adapters.osint import OSINTAdapter  # noqa: F401
 from adapters.blueteam import BlueTeamAdapter  # noqa: F401
+from adapters.adversary import AdversaryAdapter  # noqa: F401
 from services.obsidian_service import obsidian_service
 
 logger = logging.getLogger("oblivion")
@@ -1245,8 +1246,9 @@ async def execute_tool(tool: str, req: ToolExecuteRequest, response: Response, r
         raise HTTPException(404, f"Unknown tool: {tool}")
 
     # Red-team guardrail: block offensive actions against out-of-scope targets.
-    if tool in ("metasploit", "reconng", "netvision", "projectdiscovery") and req.action in (
+    if tool in ("metasploit", "reconng", "netvision", "projectdiscovery", "adversary") and req.action in (
         "run_module", "trigger_scan", "sonar_scan", "nuclei_scan", "port_scan", "crawl", "http_probe",
+        "caldera_start_operation", "atomic_run", "c2_command", "netexec_run",
     ):
         target = req.target_ref or (req.params or {}).get("target")
         if not centre_service.target_allowed(target):

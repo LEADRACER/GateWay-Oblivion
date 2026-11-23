@@ -17,7 +17,7 @@ from adapters import get_adapter
 
 logger = logging.getLogger("oblivion.centre")
 
-RED_TOOLS = {"metasploit", "reconng", "projectdiscovery"}
+RED_TOOLS = {"metasploit", "reconng", "projectdiscovery", "adversary"}
 BLUE_TOOLS = {"godseye", "system", "obsidian", "osint", "blueteam"}
 BLUE_MARKERS = ("alert", "anomal", "capture", "rogue", "health.alert", "threat", "intel", "detection")
 

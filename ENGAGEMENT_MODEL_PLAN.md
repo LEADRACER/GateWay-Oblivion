@@ -380,3 +380,10 @@ exports them to `Oblivion/Engagements/<CODE>-<kind>.md` in the vault, and persis
 SQLite. New endpoints: `POST|GET|GET /api/engagements/{id}/report[/download|s]`. ReportsTab now
 generates, previews and downloads reports. Verified live: executive + technical reports generated,
 vault file written, download works, audit chain valid, 9 unit tests, production build clean.
+
+**2026-11-23 — Phase 7 implemented:** `backend/test_integration_e2e.py` runs the entire engagement
+lifecycle over FastAPI TestClient against an isolated temporary SQLite DB and fake Obsidian writer:
+create → scope → RoE sign → authorize → activate → task approval → guarded tool execution →
+scoped pipeline run → findings/evidence → metrics → executive/technical reports + download →
+audit verification → schema v2 integrity → emergency abort. All patched globals are restored on
+teardown so the full suite runs together. **Full suite: 33 tests passing.**

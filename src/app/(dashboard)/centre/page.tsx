@@ -1,302 +1,177 @@
 'use client';
 
 // ── GateWay:Oblivion — Unified Red / Blue Operations Centre ──────
+// Modular, interactive, responsive command surface.
 
 import { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   useCentreOverview,
   useCentreTimeline,
   useCentreDetections,
+  useCentreMetrics,
+  useCentreAssets,
   useAuditStatus,
+  useCentreLive,
   type Side,
-  type CentreEvent,
-  type CentreDetection,
 } from '@/hooks/useCentre';
-import {
-  usePipelines,
-  useRunPipeline,
-  useApprovePipelineRun,
-} from '@/hooks/useIntelligence';
+import { Panel } from '@/components/centre/Panel';
+import { KpiStrip } from '@/components/centre/KpiStrip';
+import { ActivityCharts } from '@/components/centre/ActivityCharts';
+import { PipelineBoard } from '@/components/centre/PipelineBoard';
+import { EventTimeline } from '@/components/centre/EventTimeline';
+import { DetectionFeed } from '@/components/centre/DetectionFeed';
+import { AssetMap } from '@/components/centre/AssetMap';
+import { PosturePanel } from '@/components/centre/PosturePanel';
 import { Badge } from '@/components/ui/primitives';
-
-const SEVERITY_COLOR: Record<string, string> = {
-  critical: 'text-danger',
-  high: 'text-warning',
-  warning: 'text-warning',
-  medium: 'text-text-dim',
-  low: 'text-info',
-  info: 'text-text-dim',
-};
-
-function time(timestamp: string) {
-  if (!timestamp) return '--:--:--';
-  const date = new Date(timestamp);
-  return Number.isNaN(date.getTime()) ? '--:--:--' : date.toLocaleTimeString();
-}
 
 export default function CentrePage() {
   const [side, setSide] = useState<Side>('all');
+  const [windowHours, setWindowHours] = useState(24);
+  const queryClient = useQueryClient();
+
   const { data: overview } = useCentreOverview();
   const { data: events = [] } = useCentreTimeline(side);
   const { data: detections = [] } = useCentreDetections();
+  const { data: metrics } = useCentreMetrics(windowHours);
+  const { data: assets } = useCentreAssets();
   const { data: audit } = useAuditStatus();
-  const { data: pipelines = [] } = usePipelines();
-  const runPipeline = useRunPipeline();
-  const approveRun = useApprovePipelineRun();
+  const wsStatus = useCentreLive();
 
   const red = overview?.red;
   const blue = overview?.blue;
   const shared = overview?.shared;
-  const gatedIds = new Set(red?.gated_run_ids ?? []);
+
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ['centre'] });
 
   return (
     <div className="space-y-4">
       {/* ── Header ─────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <span className="relative flex h-2.5 w-2.5">
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-60" />
               <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-accent" />
             </span>
-            <h1 className="font-mono text-lg tracking-[0.2em] text-text uppercase">
-              Operations Centre
-            </h1>
+            <h1 className="font-mono text-lg tracking-[0.2em] text-text uppercase">Operations Centre</h1>
             <Badge variant="accent">RED ⇄ BLUE</Badge>
             <Badge variant={audit?.valid ? 'success' : 'danger'}>
               AUDIT {audit?.valid ? 'VERIFIED' : 'INVALID'} · {audit?.entries ?? 0}
             </Badge>
+            <Badge variant={wsStatus === 'connected' ? 'success' : 'warning'}>
+              WS {wsStatus.toUpperCase()}
+            </Badge>
           </div>
-          <p className="font-mono text-[10px] tracking-widest text-text-dim mt-1">
-            Unified offensive &amp; defensive command surface ·{' '}
+          <p className="font-mono text-[10px] text-text-dim tracking-wider mt-1">
             {shared?.tools_online ?? 0}/{shared?.tools_total ?? 0} tools online ·{' '}
-            {shared?.events_total ?? 0} normalized events
+            {shared?.events_total ?? 0} normalized events ·{' '}
+            {overview?.red?.pipelines_total ?? 0} runbooks
           </p>
         </div>
-        <div className="flex items-center gap-1 border border-border p-1 bg-surface">
-          {(['all', 'red', 'blue'] as Side[]).map((option) => (
-            <button
-              key={option}
-              onClick={() => setSide(option)}
-              className={`px-4 py-1.5 font-mono text-[10px] tracking-widest uppercase transition-all ${
-                side === option
-                  ? option === 'red'
-                    ? 'bg-danger/20 text-danger'
-                    : option === 'blue'
-                      ? 'bg-info/20 text-info'
-                      : 'bg-accent/20 text-accent'
-                  : 'text-text-dim hover:text-text'
-              }`}
-            >
-              {option}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* ── KPI strip ──────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
-        <Kpi label="Attack Surface" value={red?.attack_surface ?? '…'} color="var(--color-accent)" sub="discovered hosts" />
-        <Kpi label="Critical Vulns" value={blue?.critical_vulns ?? '…'} color="var(--color-danger)" sub={`${blue?.high_vulns ?? 0} high`} />
-        <Kpi label="Exploits Ready" value={red?.exploits_available ?? '…'} color="var(--color-danger)" sub="weaponized paths" />
-        <Kpi label="Pipelines" value={red?.pipelines_total ?? '…'} color="var(--color-info)" sub={`${red?.gated_runs ?? 0} gated`} />
-        <Kpi label="Detections" value={blue?.detections_total ?? '…'} color="var(--color-warning)" sub={`${blue?.critical_detections ?? 0} critical`} />
-        <Kpi label="Posture" value={`${blue?.posture_score ?? '…'}`} color={Number(blue?.posture_score ?? 0) >= 70 ? 'var(--color-accent)' : 'var(--color-warning)'} sub="/ 100" />
-      </div>
-
-      {/* ── Main command grid ──────────────────────────────────── */}
-      <div className="grid grid-cols-1 xl:grid-cols-[1fr_1.25fr_1fr] gap-4">
-        {/* RED */}
-        <Panel accent="var(--color-danger)" title="RED / OFFENSIVE" subtitle={`${red?.tools_ready?.length ?? 0} tools ready`}>
-          <div className="flex flex-wrap gap-1.5 mb-3">
-            {(red?.tools_ready ?? []).map((tool) => (
-              <span key={tool} className="font-mono text-[8px] tracking-widest uppercase border border-border px-2 py-0.5 text-text-dim">
-                {tool}
-              </span>
-            ))}
-          </div>
-          <div className="space-y-2">
-            {pipelines.length === 0 && (
-              <div className="p-3 border border-border font-mono text-[9px] text-text-dim">NO RUNBOOKS REGISTERED</div>
-            )}
-            {pipelines.map((pipeline) => {
-              const hasGate = pipeline.steps.some((step) => step.gate);
-              return (
-                <div key={pipeline.id} className="p-3 border border-border bg-surface hover:border-danger/40 transition-colors">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-mono text-[11px] text-text truncate">{pipeline.name}</span>
-                    <button
-                      onClick={() => runPipeline.mutate(pipeline.id)}
-                      disabled={runPipeline.isPending}
-                      className="font-mono text-[8px] tracking-widest text-danger border border-danger/40 px-2 py-1 hover:bg-danger/10 disabled:opacity-40 shrink-0"
-                    >
-                      RUN
-                    </button>
-                  </div>
-                  <div className="font-mono text-[8px] text-text-dim mt-1 tracking-wide">
-                    {pipeline.steps.length} STEPS {hasGate ? '· ⚠ HUMAN GATE' : ''}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          {red?.gated_runs ? (
-            <div className="mt-3 p-2 border border-warning/40 bg-warning/10">
-              <div className="font-mono text-[9px] text-warning tracking-wider">
-                ⚠ {red.gated_runs} RUN(S) AWAITING APPROVAL
-              </div>
-              {Array.from(gatedIds).map((id) => (
-                <button
-                  key={id}
-                  onClick={() => approveRun.mutate(id)}
-                  className="mt-2 font-mono text-[8px] tracking-widest text-bg bg-warning px-2 py-1 hover:brightness-110"
-                >
-                  APPROVE {id.slice(0, 8).toUpperCase()}
-                </button>
-              ))}
-            </div>
-          ) : null}
-          <div className="mt-3 font-mono text-[8px] text-text-dim tracking-wider">
-            SCOPE: {overview?.scope?.enforced ? overview.scope.allowlist.join(', ') : 'ADVISORY / NO ALLOWLIST'}
-          </div>
-        </Panel>
-
-        {/* TIMELINE */}
-        <Panel accent="var(--color-accent)" title="LIVE EVENT STREAM" subtitle={`${events.length} events`}>
-          <div className="space-y-1 max-h-[560px] overflow-y-auto pr-1">
-            {events.length === 0 && (
-              <div className="p-3 border border-border font-mono text-[9px] text-text-dim">NO EVENTS FOR THIS VIEW</div>
-            )}
-            {events.map((event) => (
-              <EventRow key={event.id} event={event} />
-            ))}
-          </div>
-        </Panel>
-
-        {/* BLUE */}
-        <Panel accent="var(--color-info)" title="BLUE / DEFENSIVE" subtitle={`${blue?.detections_total ?? 0} detections`}>
-          {/* posture bar */}
-          <div className="mb-3">
-            <div className="flex items-center justify-between font-mono text-[9px] tracking-widest text-text-dim uppercase">
-              <span>Posture Score</span>
-              <span className="text-text">{blue?.posture_score ?? '…'}/100</span>
-            </div>
-            <div className="h-1.5 bg-surface-3 mt-1.5 overflow-hidden">
-              <div
-                className="h-full bg-info transition-all duration-500"
-                style={{ width: `${Math.min(100, Math.max(0, blue?.posture_score ?? 0))}%` }}
-              />
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-2 mb-3">
-            <MiniStat label="Ops Success" value={`${blue?.operations_success_rate ?? 0}%`} />
-            <MiniStat label="Critical Alerts" value={String(blue?.critical_detections ?? 0)} />
-          </div>
-          <div className="flex flex-wrap gap-1.5 mb-3">
-            {Object.entries(blue?.blue_sources ?? {}).map(([name, ready]) => (
-              <span
-                key={name}
-                className={`font-mono text-[8px] tracking-widest uppercase border px-2 py-0.5 ${
-                  ready ? 'border-accent/40 text-accent' : 'border-border text-text-dim'
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1 border border-border p-1 bg-surface">
+            {(['all', 'red', 'blue'] as Side[]).map((option) => (
+              <button
+                key={option}
+                onClick={() => setSide(option)}
+                className={`px-3 py-1.5 font-mono text-[10px] tracking-widest uppercase transition-all ${
+                  side === option
+                    ? option === 'red'
+                      ? 'bg-danger/20 text-danger'
+                      : option === 'blue'
+                        ? 'bg-info/20 text-info'
+                        : 'bg-accent/20 text-accent'
+                    : 'text-text-dim hover:text-text'
                 }`}
               >
-                {name} {ready ? 'ON' : 'OFF'}
-              </span>
+                {option}
+              </button>
             ))}
           </div>
-          <div className="space-y-1 max-h-[400px] overflow-y-auto pr-1">
-            {detections.length === 0 && (
-              <div className="p-3 border border-border font-mono text-[9px] text-text-dim">NO ACTIVE DETECTIONS</div>
-            )}
-            {detections.map((detection) => (
-              <DetectionRow key={detection.id} detection={detection} />
+          <div className="flex items-center gap-1 border border-border p-1 bg-surface">
+            {[6, 24, 72].map((hours) => (
+              <button
+                key={hours}
+                onClick={() => setWindowHours(hours)}
+                className={`px-2 py-1.5 font-mono text-[9px] tracking-widest ${
+                  windowHours === hours ? 'text-accent' : 'text-text-dim hover:text-text'
+                }`}
+              >
+                {hours}H
+              </button>
             ))}
           </div>
+          <button
+            onClick={refresh}
+            className="font-mono text-[9px] tracking-widest border border-border px-3 py-2 text-text-muted hover:text-accent hover:border-accent transition-colors"
+          >
+            REFRESH
+          </button>
+        </div>
+      </div>
+
+      {/* ── KPI strip ─────────────────────────────────────────── */}
+      <KpiStrip
+        kpis={[
+          { label: 'Attack Surface', value: red?.attack_surface ?? '…', color: '#5ee28a', sub: 'discovered hosts' },
+          { label: 'Critical Vulns', value: blue?.critical_vulns ?? '…', color: '#f87171', sub: `${blue?.high_vulns ?? 0} high` },
+          { label: 'Exploits Ready', value: red?.exploits_available ?? '…', color: '#f87171', sub: 'weaponized paths' },
+          { label: 'Pipelines', value: red?.pipelines_total ?? '…', color: '#60a5fa', sub: `${red?.gated_runs ?? 0} gated` },
+          { label: 'Detections', value: blue?.detections_total ?? '…', color: '#fbbf24', sub: `${blue?.critical_detections ?? 0} critical` },
+          { label: 'Posture', value: blue?.posture_score ?? '…', color: (blue?.posture_score ?? 0) >= 70 ? '#5ee28a' : '#fbbf24', sub: '/ 100' },
+        ]}
+      />
+
+      {/* ── Charts ────────────────────────────────────────────── */}
+      <ActivityCharts metrics={metrics} />
+
+      {/* ── Command grid ──────────────────────────────────────── */}
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-4">
+        <Panel
+          title="RED / OFFENSIVE"
+          subtitle={`${red?.tools_ready?.length ?? 0} tools ready`}
+          accent="var(--color-danger)"
+          className="xl:col-span-3"
+        >
+          <PipelineBoard gatedRunIds={red?.gated_run_ids ?? []} />
+        </Panel>
+
+        <Panel
+          title="LIVE EVENT STREAM"
+          subtitle={`${events.length} events · ${side}`}
+          className="xl:col-span-6"
+        >
+          <EventTimeline events={events} />
+        </Panel>
+
+        <Panel
+          title="BLUE / DEFENSIVE"
+          subtitle={`${blue?.detections_total ?? 0} detections`}
+          accent="var(--color-info)"
+          className="xl:col-span-3"
+        >
+          <PosturePanel blue={blue} scope={overview?.scope} toolsReady={red?.tools_ready ?? []} />
         </Panel>
       </div>
-    </div>
-  );
-}
 
-/* ── UI helpers ─────────────────────────────────────────────────── */
-
-function Panel({
-  accent,
-  title,
-  subtitle,
-  children,
-}: {
-  accent: string;
-  title: string;
-  subtitle: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="border border-border bg-bg/60 p-4 relative" style={{ boxShadow: `inset 0 2px 0 ${accent}` }}>
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="font-mono text-[10px] tracking-[0.2em] uppercase" style={{ color: accent }}>
-          {title}
-        </h2>
-        <span className="font-mono text-[8px] tracking-widest text-text-dim uppercase">{subtitle}</span>
-      </div>
-      {children}
-    </section>
-  );
-}
-
-function Kpi({ label, value, color, sub }: { label: string; value: string | number; color: string; sub: string }) {
-  return (
-    <div className="border border-border bg-surface p-3 border-l-2" style={{ borderLeftColor: color }}>
-      <div className="font-mono text-[8px] tracking-widest text-text-dim uppercase">{label}</div>
-      <div className="font-mono text-2xl mt-1" style={{ color }}>{value}</div>
-      <div className="font-mono text-[8px] text-text-dim mt-1">{sub}</div>
-    </div>
-  );
-}
-
-function MiniStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="p-2 border border-border bg-surface">
-      <div className="font-mono text-[8px] tracking-widest text-text-dim uppercase">{label}</div>
-      <div className="font-mono text-sm text-text mt-0.5">{value}</div>
-    </div>
-  );
-}
-
-function EventRow({ event }: { event: CentreEvent }) {
-  const sideColor = event.side === 'red' ? 'text-danger' : event.side === 'blue' ? 'text-info' : 'text-text-dim';
-  const sideLabel = event.side === 'red' ? 'R' : event.side === 'blue' ? 'B' : '·';
-  return (
-    <div className="flex items-start gap-2 p-2 border border-border bg-surface hover:bg-surface-2 transition-colors">
-      <span className={`font-mono text-[10px] font-bold ${sideColor} w-3 shrink-0`}>{sideLabel}</span>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center justify-between gap-2">
-          <span className="font-mono text-[10px] text-text truncate">{event.title}</span>
-          <span className={`font-mono text-[8px] shrink-0 ${SEVERITY_COLOR[event.severity ?? 'info'] || 'text-text-dim'}`}>
-            {event.severity?.toUpperCase() ?? 'INFO'}
-          </span>
-        </div>
-        <div className="font-mono text-[8px] text-text-dim mt-0.5 truncate">
-          {event.source} · {event.event_type}
-          {event.target_ref ? ` · ${event.target_ref}` : ''}
-        </div>
-      </div>
-      <span className="font-mono text-[8px] text-text-dim/60 shrink-0">{time(event.timestamp)}</span>
-    </div>
-  );
-}
-
-function DetectionRow({ detection }: { detection: CentreDetection }) {
-  return (
-    <div className="p-2 border border-border bg-surface hover:bg-surface-2 transition-colors">
-      <div className="flex items-center justify-between gap-2">
-        <span className="font-mono text-[9px] text-text truncate">{detection.title}</span>
-        <span className={`font-mono text-[8px] shrink-0 ${SEVERITY_COLOR[detection.severity] || 'text-text-dim'}`}>
-          {detection.severity.toUpperCase()}
-        </span>
-      </div>
-      <div className="font-mono text-[8px] text-text-dim mt-0.5">
-        {detection.source} · {detection.detail} · {time(detection.timestamp)}
+      {/* ── Assets & detections ───────────────────────────────── */}
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-4">
+        <Panel
+          title="ATTACK SURFACE MAP"
+          subtitle={`${assets?.total ?? 0} hosts`}
+          className="xl:col-span-7"
+        >
+          <AssetMap assets={assets} />
+        </Panel>
+        <Panel
+          title="DETECTION FEED"
+          subtitle="merged defensive telemetry"
+          accent="var(--color-warning)"
+          className="xl:col-span-5"
+        >
+          <DetectionFeed detections={detections} />
+        </Panel>
       </div>
     </div>
   );

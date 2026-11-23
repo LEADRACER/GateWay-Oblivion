@@ -2,7 +2,9 @@
 
 // ── GateWay:Oblivion — Unified Centre Hooks ───────────────────────
 
-import { useQuery } from '@tanstack/react-query';
+import { useCallback } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useWS, type WSStatus } from '@/hooks/useWS';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
 
@@ -119,4 +121,79 @@ export function useAuditStatus() {
     },
     refetchInterval: 15_000,
   });
+}
+
+// ── Charts & assets ───────────────────────────────────────────────
+
+export interface CentreMetricPoint {
+  label: string;
+  red: number;
+  blue: number;
+  shared: number;
+  critical: number;
+  high: number;
+  warning: number;
+  info: number;
+}
+
+export interface CentreMetrics {
+  series: CentreMetricPoint[];
+  severity: Array<{ name: string; value: number }>;
+  sides: Array<{ name: string; value: number }>;
+  hours: number;
+}
+
+export interface CentreAsset {
+  ip: string;
+  mac?: string | null;
+  vendor?: string | null;
+  hostname?: string | null;
+  os?: string | null;
+  ports: number;
+  health?: string | null;
+  source: string;
+}
+
+export interface CentreAssets {
+  hosts: CentreAsset[];
+  total: number;
+  by_vendor: Array<{ name: string; value: number }>;
+}
+
+export function useCentreMetrics(hours = 24, buckets = 12) {
+  return useQuery({
+    queryKey: ['centre', 'metrics', hours, buckets],
+    queryFn: async (): Promise<CentreMetrics> => {
+      const res = await fetch(`${API_BASE}/api/centre/metrics?hours=${hours}&buckets=${buckets}`);
+      if (!res.ok) throw new Error('Failed to fetch centre metrics');
+      return res.json();
+    },
+    refetchInterval: 15_000,
+  });
+}
+
+export function useCentreAssets(limit = 100) {
+  return useQuery({
+    queryKey: ['centre', 'assets', limit],
+    queryFn: async (): Promise<CentreAssets> => {
+      const res = await fetch(`${API_BASE}/api/centre/assets?limit=${limit}`);
+      if (!res.ok) throw new Error('Failed to fetch assets');
+      return res.json();
+    },
+    refetchInterval: 30_000,
+  });
+}
+
+/** True WebSocket push — invalidates Centre queries on every event. */
+export function useCentreLive(): WSStatus {
+  const queryClient = useQueryClient();
+  const url = process.env.NEXT_PUBLIC_WS_URL
+    || `${API_BASE.replace(/^http/, 'ws')}/ws`;
+
+  const onMessage = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ['centre'] });
+    queryClient.invalidateQueries({ queryKey: ['recon'] });
+  }, [queryClient]);
+
+  return useWS({ url, onMessage }).status;
 }

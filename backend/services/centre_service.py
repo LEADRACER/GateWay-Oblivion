@@ -232,5 +232,105 @@ class CentreService:
                 break
         return out
 
+    def metrics(self, hours: int = 24, buckets: int = 12) -> dict:
+        """Time-bucketed event activity + severity distribution for charts."""
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+        start = now - timedelta(hours=hours)
+        width = max(1, int(hours * 60 / buckets))
+        series = []
+        cursor = start
+        for _ in range(buckets):
+            end = cursor + timedelta(minutes=width)
+            series.append({
+                "label": cursor.strftime("%H:%M"),
+                "start": cursor.isoformat(),
+                "red": 0, "blue": 0, "shared": 0,
+                "critical": 0, "high": 0, "warning": 0, "info": 0,
+            })
+            cursor = end
+
+        severity_counts = {"critical": 0, "high": 0, "warning": 0, "info": 0}
+        side_counts = {"red": 0, "blue": 0, "shared": 0}
+        for event in event_bus.list_events(limit=500):
+            try:
+                ts = datetime.fromisoformat(event.timestamp)
+            except (ValueError, TypeError):
+                continue
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            index = int((ts - start).total_seconds() / (width * 60))
+            side = classify_side(event)
+            side_counts[side] = side_counts.get(side, 0) + 1
+            sev = (event.severity or "info").lower()
+            if sev not in severity_counts:
+                sev = "info"
+            severity_counts[sev] += 1
+            if 0 <= index < len(series):
+                series[index][side] += 1
+                series[index][sev] += 1
+
+        return {
+            "series": series,
+            "severity": [{"name": key, "value": value} for key, value in severity_counts.items()],
+            "sides": [{"name": key, "value": value} for key, value in side_counts.items()],
+            "hours": hours,
+        }
+
+    async def assets(self, limit: int = 100) -> dict:
+        """Attack-surface inventory from NetVision devices + sonar discovery events."""
+        hosts: dict[str, dict] = {}
+        adapter = get_adapter("netvision")
+        if adapter:
+            try:
+                devices = await adapter.execute("devices")
+                for device in devices.get("devices", []):
+                    ip = device.get("ip")
+                    if not ip:
+                        continue
+                    hosts[ip] = {
+                        "ip": ip,
+                        "mac": device.get("mac"),
+                        "vendor": device.get("vendor"),
+                        "hostname": device.get("hostname"),
+                        "os": device.get("os"),
+                        "ports": len(device.get("ports", [])),
+                        "health": (device.get("health") or {}).get("status"),
+                        "source": "netvision",
+                    }
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Asset inventory from NetVision unavailable: %s", exc)
+
+        for event in event_bus.list_events(limit=300):
+            if not event.event_type.startswith("netvision.discovery"):
+                continue
+            payload = event.payload or {}
+            data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+            ip = data.get("ip")
+            if not ip or ip in hosts:
+                continue
+            hosts[ip] = {
+                "ip": ip,
+                "mac": data.get("mac"),
+                "vendor": data.get("vendor"),
+                "hostname": data.get("hostname"),
+                "os": None,
+                "ports": 0,
+                "health": None,
+                "source": "sonar",
+            }
+        rows = list(hosts.values())[:limit]
+        by_vendor: dict[str, int] = {}
+        for host in rows:
+            key = host.get("vendor") or "Unknown"
+            by_vendor[key] = by_vendor.get(key, 0) + 1
+        return {
+            "hosts": rows,
+            "total": len(rows),
+            "by_vendor": [{"name": key, "value": value} for key, value in
+                          sorted(by_vendor.items(), key=lambda kv: -kv[1])],
+        }
+
 
 centre_service = CentreService()

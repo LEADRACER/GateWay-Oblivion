@@ -1505,6 +1505,16 @@ async def centre_scope():
     return centre_service.scope_status()
 
 
+@app.get("/api/centre/metrics")
+async def centre_metrics(hours: int = Query(24), buckets: int = Query(12)):
+    return centre_service.metrics(hours=hours, buckets=buckets)
+
+
+@app.get("/api/centre/assets")
+async def centre_assets(limit: int = Query(100)):
+    return await centre_service.assets(limit=limit)
+
+
 # ═══════════════════════════════════════════════════════════════════
 # Tamper-evident Audit Log API
 # ═══════════════════════════════════════════════════════════════════

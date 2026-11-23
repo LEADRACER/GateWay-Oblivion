@@ -270,6 +270,12 @@ management), live unified timeline on `/intelligence`, and real TopBar status (W
 fleet counts from `/api/tools`). SideNav now includes Pipelines, OSINT and Obsidian entries.
 `tsc --noEmit` and `eslint` clean.
 
+**2026-11-23 — Centre visual upgrade:** modular components under `src/components/centre/`
+(KPI strip, Recharts activity/donation charts, attack-surface map, event timeline, detection feed,
+pipeline board, posture panel), true WebSocket push via `useCentreLive`, responsive 12-column grid,
+interactive side/severity/source/time-window filters, and new backend endpoints
+`GET /api/centre/metrics` + `GET /api/centre/assets`. Production `npm run build` verified.
+
 **Obsidian integration (2026-11-21): ✅ IMPLEMENTED & VERIFIED** — `backend/services/obsidian_service.py`
 (server-side vault management at `/home/dark00/Obsidian/Vault`, configurable via `OBSIDIAN_VAULT_PATH`):
 notes (list/read/create/update/append/delete/search + report→Obsidian Flavored Markdown export with frontmatter,

@@ -1,5 +1,6 @@
 'use client';
 
+import { useMemo } from 'react';
 import {
   Area, AreaChart, CartesianGrid, Cell, Pie, PieChart,
   ResponsiveContainer, Tooltip, XAxis, YAxis,
@@ -17,8 +18,8 @@ const COLORS: Record<string, string> = {
 };
 
 export function ActivityCharts({ metrics }: { metrics?: CentreMetrics }) {
-  const series = metrics?.series ?? [];
-  const sides = metrics?.sides ?? [];
+  const series = useMemo(() => metrics?.series ?? [], [metrics]);
+  const sides = useMemo(() => metrics?.sides ?? [], [metrics]);
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[1.6fr_1fr] gap-4">

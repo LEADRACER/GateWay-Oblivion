@@ -1,6 +1,7 @@
 'use client';
 
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { useMemo } from 'react';
 import {
   useEngagementFindings, useEngagementActions,
   type Engagement,
@@ -12,10 +13,14 @@ const STATUSES = ['new', 'triaged', 'confirmed', 'remediated', 'accepted-risk', 
 export function FindingsTab({ engagement }: { engagement: Engagement }) {
   const { data: findings = [] } = useEngagementFindings(engagement.id);
   const actions = useEngagementActions();
-  const chartData = ['critical', 'high', 'medium', 'low', 'info'].map((severity) => ({
-    severity,
-    count: findings.filter((finding) => finding.severity === severity).length,
-  }));
+  const chartData = useMemo(
+    () =>
+      ['critical', 'high', 'medium', 'low', 'info'].map((severity) => ({
+        severity,
+        count: findings.filter((finding) => finding.severity === severity).length,
+      })),
+    [findings],
+  );
 
   return (
     <div className="space-y-4">

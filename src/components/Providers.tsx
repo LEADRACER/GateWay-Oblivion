@@ -14,6 +14,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
             staleTime: 10_000,
             refetchInterval: 30_000,
             retry: 2,
+            gcTime: 300_000,
           },
         },
       }),

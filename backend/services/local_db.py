@@ -28,7 +28,7 @@ def _checksum(payload: str) -> str:
 
 
 class LocalDB:
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
 
     def __init__(self, db_path: Optional[str] = None, legacy_dir: Optional[str] = None):
         base = Path(__file__).resolve().parents[1] / "data"
@@ -85,6 +85,28 @@ class LocalDB:
                     data TEXT NOT NULL,
                     hash TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS engagement_entities (
+                    kind TEXT NOT NULL,
+                    id TEXT NOT NULL,
+                    engagement_id TEXT NOT NULL,
+                    state TEXT,
+                    severity TEXT,
+                    status TEXT,
+                    data TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (kind, id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_eng_entities ON engagement_entities(engagement_id);
+                CREATE INDEX IF NOT EXISTS idx_eng_kind ON engagement_entities(kind, state);
+                CREATE TABLE IF NOT EXISTS engagement_events (
+                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                    engagement_id TEXT NOT NULL,
+                    event_id TEXT NOT NULL,
+                    data TEXT NOT NULL,
+                    timestamp TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_eng_events ON engagement_events(engagement_id);
             """)
             self._conn.execute(
                 "INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', ?)",
@@ -250,13 +272,101 @@ class LocalDB:
         except ValueError:
             return None
 
+    # ── engagement entities ──────────────────────────────────────
+
+    def upsert_entity(
+        self,
+        kind: str,
+        entity_id: str,
+        engagement_id: str,
+        data: dict,
+        state: str | None = None,
+        severity: str | None = None,
+        status: str | None = None,
+    ) -> None:
+        payload = json.dumps(data, default=str, ensure_ascii=False)
+        now = _now()
+        with self._lock, self._conn:
+            self._conn.execute(
+                """INSERT INTO engagement_entities
+                   (kind, id, engagement_id, state, severity, status, data, created_at, updated_at)
+                   VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(kind, id) DO UPDATE SET
+                     state=excluded.state, severity=excluded.severity,
+                     status=excluded.status, data=excluded.data, updated_at=excluded.updated_at""",
+                (kind, entity_id, engagement_id, state, severity, status, payload, now, now),
+            )
+
+    def get_entity(self, kind: str, entity_id: str) -> dict | None:
+        row = self._conn.execute(
+            "SELECT data FROM engagement_entities WHERE kind = ? AND id = ?",
+            (kind, entity_id),
+        ).fetchone()
+        if not row:
+            return None
+        try:
+            return json.loads(row["data"])
+        except ValueError:
+            return None
+
+    def list_entities(
+        self,
+        kind: str,
+        engagement_id: str | None = None,
+        limit: int = 200,
+    ) -> list:
+        query = "SELECT data FROM engagement_entities WHERE kind = ?"
+        params: list = [kind]
+        if engagement_id:
+            query += " AND engagement_id = ?"
+            params.append(engagement_id)
+        query += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(limit)
+        rows = self._conn.execute(query, params).fetchall()
+        out = []
+        for row in rows:
+            try:
+                out.append(json.loads(row["data"]))
+            except ValueError:
+                continue
+        return out
+
+    def delete_entity(self, kind: str, entity_id: str) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "DELETE FROM engagement_entities WHERE kind = ? AND id = ?",
+                (kind, entity_id),
+            )
+
+    def append_engagement_event(self, engagement_id: str, event_id: str, data: dict) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                """INSERT INTO engagement_events(engagement_id, event_id, data, timestamp)
+                   VALUES(?, ?, ?, ?)""",
+                (engagement_id, event_id, json.dumps(data, default=str), _now()),
+            )
+
+    def list_engagement_events(self, engagement_id: str, limit: int = 100) -> list:
+        rows = self._conn.execute(
+            """SELECT data FROM engagement_events WHERE engagement_id = ?
+               ORDER BY seq DESC LIMIT ?""",
+            (engagement_id, limit),
+        ).fetchall()
+        out = []
+        for row in rows:
+            try:
+                out.append(json.loads(row["data"]))
+            except ValueError:
+                continue
+        return out
+
     # ── maintenance ───────────────────────────────────────────────
 
     def integrity(self) -> dict:
         result = self._conn.execute("PRAGMA integrity_check").fetchone()[0]
         counts = {
             table: self._conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-            for table in ("snapshots", "events", "audit")
+            for table in ("snapshots", "events", "audit", "engagement_entities", "engagement_events")
         }
         return {
             "integrity": result,

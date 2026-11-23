@@ -31,6 +31,8 @@ class CanonicalEvent(BaseModel):
     payload: dict = Field(default_factory=dict)
     correlation_id: Optional[str] = None
     target_ref: Optional[str] = None
+    engagement_id: Optional[str] = None
+    task_id: Optional[str] = None
 
 
 class CanonicalTarget(BaseModel):

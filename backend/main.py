@@ -24,6 +24,7 @@ from services.intel_service import intel_store, ReportCreate, Report
 from services.persistence import persistence, dump_models
 from services.audit_log import audit_log
 from services.local_db import local_db
+from services.engagement_service import engagement_service, EngagementError
 from services.event_bus import event_bus
 from services.resilience import TTLCache, CircuitBreaker, HealthMonitor, CircuitOpen
 from services.centre_service import centre_service
@@ -278,6 +279,19 @@ store = Store()
 
 def _actor(request: Request) -> str:
     return request.headers.get("X-Operator") or "operator"
+
+
+def _guard_engagement(request: Request, tool: str, action: str,
+                      params: dict, target: object) -> Optional[str]:
+    """Per-engagement guard. Returns engagement_id when X-Engagement is present."""
+    engagement_id = request.headers.get("X-Engagement")
+    if not engagement_id:
+        return None
+    try:
+        engagement_service.guard(engagement_id, tool, action, target, _actor(request))
+    except EngagementError as exc:
+        raise HTTPException(exc.code, str(exc))
+    return engagement_id
 
 
 def restore_snapshot() -> bool:
@@ -1245,13 +1259,16 @@ async def execute_tool(tool: str, req: ToolExecuteRequest, response: Response, r
     if adapter is None:
         raise HTTPException(404, f"Unknown tool: {tool}")
 
-    # Red-team guardrail: block offensive actions against out-of-scope targets.
-    if tool in ("metasploit", "reconng", "netvision", "projectdiscovery", "adversary") and req.action in (
+    target_value = req.target_ref or (req.params or {}).get("target")
+    engagement_id = _guard_engagement(
+        request, tool, req.action, req.params or {}, target_value
+    )
+    # Legacy global scope ceiling still applies when no engagement is selected.
+    if not engagement_id and tool in ("metasploit", "reconng", "netvision", "projectdiscovery", "adversary") and req.action in (
         "run_module", "trigger_scan", "sonar_scan", "nuclei_scan", "port_scan", "crawl", "http_probe",
         "caldera_start_operation", "atomic_run", "c2_command", "netexec_run",
     ):
-        target = req.target_ref or (req.params or {}).get("target")
-        if not centre_service.target_allowed(target):
+        if not centre_service.target_allowed(target_value):
             raise HTTPException(403, "Target is outside the configured OBLIVION_SCOPE allowlist")
 
     breaker = health_monitor.breaker(tool) if health_monitor else CircuitBreaker(tool)
@@ -1282,7 +1299,7 @@ async def execute_tool(tool: str, req: ToolExecuteRequest, response: Response, r
     if not cached:
         # Normalize tool output into a canonical event and push through the bus
         # -> subscribers (WS fan-out, timeline, pipelines).
-        await event_bus.emit(
+        canonical = await event_bus.emit(
             source_tool=tool,
             event_type=f"{tool}.{req.action}",
             payload={"action": req.action, "params": req.params or {}, "result": result},
@@ -1290,7 +1307,9 @@ async def execute_tool(tool: str, req: ToolExecuteRequest, response: Response, r
             title=f"{tool} {req.action}",
             target_ref=req.target_ref,
             correlation_id=req.correlation_id,
+            engagement_id=engagement_id,
         )
+        engagement_service.record_event(canonical)
 
         await manager.broadcast({
             "type": f"{tool}.executed",
@@ -1311,7 +1330,7 @@ async def execute_tool(tool: str, req: ToolExecuteRequest, response: Response, r
         side="red" if tool in ("metasploit", "reconng", "netvision") else "blue",
         resource=tool,
         result={"cached": cached, "status": "ok"},
-        metadata={"correlation_id": req.correlation_id},
+        metadata={"correlation_id": req.correlation_id, "engagement_id": engagement_id},
     )
     return {"tool": tool, "action": req.action, "result": result, "cached": cached}
 
@@ -1477,6 +1496,231 @@ async def cancel_pipeline_run(request: Request, run_id: str):
         side="red", result={"status": run.status},
     )
     return {"run_id": run.id, "status": run.status}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Engagement Management API (Phase 1 + 2)
+# ═══════════════════════════════════════════════════════════════════
+
+async def _eng_audit(request: Request, action: str, engagement_id: str, result=None):
+    await audit_log.append(
+        actor=_actor(request),
+        action=f"engagement.{action}",
+        target=engagement_id,
+        side="red",
+        resource=engagement_id,
+        result=result or {},
+    )
+
+
+def _eng_or_404(engagement_id: str):
+    engagement = engagement_service.get_engagement(engagement_id)
+    if not engagement:
+        raise HTTPException(404, "Engagement not found")
+    return engagement
+
+
+@app.get("/api/engagements")
+async def list_engagements(
+    state: Optional[str] = Query(None),
+    engagement_type: Optional[str] = Query(None),
+    lead: Optional[str] = Query(None),
+):
+    return {"engagements": [
+        e.model_dump() for e in
+        engagement_service.list_engagements(state, engagement_type, lead)
+    ]}
+
+
+@app.post("/api/engagements")
+async def create_engagement(request: Request, data: dict):
+    engagement = engagement_service.create_engagement(data, _actor(request))
+    await _eng_audit(request, "create", engagement.id, {"code": engagement.code})
+    return engagement.model_dump()
+
+
+@app.get("/api/engagements/{engagement_id}")
+async def get_engagement(engagement_id: str):
+    return _eng_or_404(engagement_id).model_dump()
+
+
+@app.patch("/api/engagements/{engagement_id}")
+async def update_engagement(engagement_id: str, request: Request, data: dict):
+    try:
+        engagement = engagement_service.update_engagement(engagement_id, data)
+    except EngagementError as exc:
+        raise HTTPException(exc.code, str(exc))
+    await _eng_audit(request, "update", engagement_id)
+    return engagement.model_dump()
+
+
+@app.post("/api/engagements/{engagement_id}/transition")
+async def transition_engagement(engagement_id: str, request: Request, data: dict):
+    try:
+        engagement = engagement_service.transition(
+            engagement_id, data.get("to", ""), _actor(request), data.get("reason", "")
+        )
+    except EngagementError as exc:
+        raise HTTPException(exc.code, str(exc))
+    await _eng_audit(request, "transition", engagement_id, {"to": engagement.state})
+    return engagement.model_dump()
+
+
+@app.post("/api/engagements/{engagement_id}/activate")
+async def activate_engagement(engagement_id: str, request: Request):
+    try:
+        engagement = engagement_service.transition(engagement_id, "active", _actor(request))
+    except EngagementError as exc:
+        raise HTTPException(exc.code, str(exc))
+    await _eng_audit(request, "activate", engagement_id)
+    return engagement.model_dump()
+
+
+@app.post("/api/engagements/{engagement_id}/abort")
+async def abort_engagement(engagement_id: str, request: Request, data: dict):
+    try:
+        engagement = engagement_service.abort(
+            engagement_id, _actor(request), data.get("reason") or "Emergency abort"
+        )
+    except EngagementError as exc:
+        raise HTTPException(exc.code, str(exc))
+    await _eng_audit(request, "abort", engagement_id, {"reason": data.get("reason")})
+    return engagement.model_dump()
+
+
+@app.get("/api/engagements/{engagement_id}/scope")
+async def get_scope(engagement_id: str):
+    _eng_or_404(engagement_id)
+    scope = engagement_service.get_scope(engagement_id)
+    return scope.model_dump() if scope else {}
+
+
+@app.put("/api/engagements/{engagement_id}/scope")
+async def set_scope(engagement_id: str, request: Request, data: dict):
+    _eng_or_404(engagement_id)
+    scope = engagement_service.set_scope(engagement_id, data)
+    await _eng_audit(request, "scope.update", engagement_id)
+    return scope.model_dump()
+
+
+@app.get("/api/engagements/{engagement_id}/roe")
+async def get_roe(engagement_id: str):
+    _eng_or_404(engagement_id)
+    roe = engagement_service.get_roe(engagement_id)
+    return roe.model_dump() if roe else {}
+
+
+@app.put("/api/engagements/{engagement_id}/roe")
+async def set_roe(engagement_id: str, request: Request, data: dict):
+    _eng_or_404(engagement_id)
+    roe = engagement_service.set_roe(engagement_id, data)
+    await _eng_audit(request, "roe.update", engagement_id)
+    return roe.model_dump()
+
+
+@app.post("/api/engagements/{engagement_id}/roe/sign")
+async def sign_roe(engagement_id: str, request: Request):
+    try:
+        roe = engagement_service.sign_roe(engagement_id, _actor(request))
+    except EngagementError as exc:
+        raise HTTPException(exc.code, str(exc))
+    await _eng_audit(request, "roe.sign", engagement_id)
+    return roe.model_dump()
+
+
+@app.get("/api/engagements/{engagement_id}/tasks")
+async def list_tasks(engagement_id: str):
+    _eng_or_404(engagement_id)
+    return {"tasks": [t.model_dump() for t in engagement_service.list_tasks(engagement_id)]}
+
+
+@app.post("/api/engagements/{engagement_id}/tasks")
+async def add_task(engagement_id: str, request: Request, data: dict):
+    _eng_or_404(engagement_id)
+    task = engagement_service.add_task(engagement_id, data)
+    await _eng_audit(request, "task.create", engagement_id, {"task_id": task.id})
+    return task.model_dump()
+
+
+@app.patch("/api/engagements/{engagement_id}/tasks/{task_id}")
+async def update_task(engagement_id: str, task_id: str, request: Request, data: dict):
+    try:
+        task = engagement_service.update_task(engagement_id, task_id, data)
+    except EngagementError as exc:
+        raise HTTPException(exc.code, str(exc))
+    await _eng_audit(request, "task.update", engagement_id, {"task_id": task_id})
+    return task.model_dump()
+
+
+@app.post("/api/engagements/{engagement_id}/tasks/{task_id}/approve")
+async def approve_task(engagement_id: str, task_id: str, request: Request, data: dict):
+    try:
+        approval = engagement_service.approve_task(
+            engagement_id, task_id, _actor(request),
+            data.get("decision", "approved"), data.get("reason", ""),
+        )
+    except EngagementError as exc:
+        raise HTTPException(exc.code, str(exc))
+    await _eng_audit(request, "task.approve", engagement_id,
+                     {"task_id": task_id, "decision": approval.decision})
+    return approval.model_dump()
+
+
+@app.get("/api/engagements/{engagement_id}/findings")
+async def list_findings(engagement_id: str, severity: Optional[str] = Query(None)):
+    _eng_or_404(engagement_id)
+    return {"findings": [
+        f.model_dump() for f in engagement_service.list_findings(engagement_id, severity)
+    ]}
+
+
+@app.post("/api/engagements/{engagement_id}/findings")
+async def add_finding(engagement_id: str, request: Request, data: dict):
+    _eng_or_404(engagement_id)
+    finding = engagement_service.add_finding(engagement_id, data)
+    await _eng_audit(request, "finding.create", engagement_id, {"finding_id": finding.id})
+    return finding.model_dump()
+
+
+@app.patch("/api/engagements/{engagement_id}/findings/{finding_id}")
+async def update_finding(engagement_id: str, finding_id: str, request: Request, data: dict):
+    try:
+        finding = engagement_service.update_finding_status(
+            engagement_id, finding_id, data.get("status", "new"), _actor(request)
+        )
+    except EngagementError as exc:
+        raise HTTPException(exc.code, str(exc))
+    await _eng_audit(request, "finding.update", engagement_id,
+                     {"finding_id": finding_id, "status": finding.status})
+    return finding.model_dump()
+
+
+@app.get("/api/engagements/{engagement_id}/evidence")
+async def list_evidence(engagement_id: str):
+    _eng_or_404(engagement_id)
+    return {"evidence": [e.model_dump() for e in engagement_service.list_evidence(engagement_id)]}
+
+
+@app.post("/api/engagements/{engagement_id}/evidence")
+async def add_evidence(engagement_id: str, request: Request, data: dict):
+    _eng_or_404(engagement_id)
+    evidence = engagement_service.add_evidence(engagement_id, data)
+    await _eng_audit(request, "evidence.add", engagement_id, {"evidence_id": evidence.id})
+    return evidence.model_dump()
+
+
+@app.get("/api/engagements/{engagement_id}/events")
+async def engagement_events(engagement_id: str, limit: int = Query(100)):
+    _eng_or_404(engagement_id)
+    return {"events": engagement_service.list_events(engagement_id, limit)}
+
+
+@app.get("/api/engagements/{engagement_id}/metrics")
+async def engagement_metrics(engagement_id: str):
+    try:
+        return engagement_service.metrics(engagement_id)
+    except EngagementError as exc:
+        raise HTTPException(exc.code, str(exc))
 
 
 # ═══════════════════════════════════════════════════════════════════

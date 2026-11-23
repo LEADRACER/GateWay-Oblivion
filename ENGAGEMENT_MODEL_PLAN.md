@@ -344,3 +344,17 @@ enforceable scope and state. Then Phase 3/4 to wire pipelines and audit. UI last
 
 **Design principle:** nothing in the current build changes behavior until an engagement is explicitly
 created and activated — existing adapters, pipelines and Centre keep working exactly as today.
+
+## Implementation status
+
+**2026-11-23 — Phases 1 + 2 implemented:** `backend/models/engagement.py` defines all eight canonical
+entities plus state-transition tables; `CanonicalEvent` gained optional `engagement_id`/`task_id`.
+`backend/services/local_db.py` migrated to schema v2 with unified `engagement_entities` and
+`engagement_events` tables (verified: integrity `ok` on an existing v1 database).
+`backend/services/engagement_service.py` implements CRUD, state machines, scope/RoE management,
+task approvals, findings/evidence, metrics and the enforceable `guard()`.
+The REST API exposes `/api/engagements/*`, and `X-Engagement` activates per-engagement guarding on
+tool execution while preserving legacy `OBLIVION_SCOPE` behavior when the header is absent.
+*Verified live:* create → scope → RoE sign → authorized → active → task approval; out-of-scope
+target returns 403, destructive action without approval returns 403, in-scope action succeeds,
+no-header legacy call unchanged, audit chain valid, 4 unit tests passing.

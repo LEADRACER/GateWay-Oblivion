@@ -25,6 +25,9 @@ from services.persistence import persistence, dump_models
 from services.audit_log import audit_log
 from services.local_db import local_db
 from services.engagement_service import engagement_service, EngagementError
+from services.engagement_report import EngagementReportService
+
+engagement_report_service = EngagementReportService(engagement_service)
 from services.event_bus import event_bus
 from services.resilience import TTLCache, CircuitBreaker, HealthMonitor, CircuitOpen
 from services.centre_service import centre_service
@@ -1828,6 +1831,56 @@ async def engagement_metrics(engagement_id: str):
         return engagement_service.metrics(engagement_id)
     except EngagementError as exc:
         raise HTTPException(exc.code, str(exc))
+
+
+@app.post("/api/engagements/{engagement_id}/report")
+async def generate_engagement_report(engagement_id: str, request: Request, data: dict):
+    _eng_or_404(engagement_id)
+    try:
+        report = engagement_report_service.export(engagement_id, data.get("kind", "executive"))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    await _eng_audit(request, "report.generate", engagement_id,
+                     {"kind": report["kind"], "path": report["path"]})
+    await event_bus.emit(
+        source_tool="engagement",
+        event_type="engagement.report.generated",
+        payload={"engagement_id": engagement_id, "kind": report["kind"], "path": report["path"]},
+        severity="info",
+        title=f"Report generated — {report['kind']}",
+        engagement_id=engagement_id,
+    )
+    return report
+
+
+@app.get("/api/engagements/{engagement_id}/reports")
+async def list_engagement_reports(engagement_id: str, kind: Optional[str] = Query(None)):
+    _eng_or_404(engagement_id)
+    return {"reports": [
+        report.model_dump() for report in engagement_service.list_reports(engagement_id, kind)
+    ]}
+
+
+@app.get("/api/engagements/{engagement_id}/report")
+async def get_engagement_report(engagement_id: str, kind: str = Query("executive")):
+    _eng_or_404(engagement_id)
+    reports = engagement_service.list_reports(engagement_id, kind)
+    if not reports:
+        raise HTTPException(404, "No report generated for this engagement")
+    return reports[0].model_dump()
+
+
+@app.get("/api/engagements/{engagement_id}/report/download")
+async def download_engagement_report(engagement_id: str, kind: str = Query("executive")):
+    _eng_or_404(engagement_id)
+    reports = engagement_service.list_reports(engagement_id, kind)
+    if not reports:
+        raise HTTPException(404, "No report generated for this engagement")
+    return Response(
+        content=reports[0].content,
+        media_type="text/markdown",
+        headers={"Content-Disposition": f'attachment; filename="{engagement_id}-{kind}.md"'},
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════

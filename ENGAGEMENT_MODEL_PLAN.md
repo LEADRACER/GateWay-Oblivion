@@ -373,3 +373,10 @@ eight tabs (Overview, Scope & RoE, Tasks kanban, Findings with severity chart, T
 Pipelines, Reports), editable scope/RoE, activate/abort controls, approval buttons, and typed hooks
 in `src/hooks/useEngagements.ts`. Engagement progress now refreshes after pipeline task completion.
 Verified: `tsc`, ESLint and production `npm run build` clean.
+
+**2026-11-23 — Phase 6 implemented:** `backend/services/engagement_report.py` renders Obsidian
+Flavored Markdown reports (frontmatter, callouts, wikilinks) in executive/technical variants,
+exports them to `Oblivion/Engagements/<CODE>-<kind>.md` in the vault, and persists content/path in
+SQLite. New endpoints: `POST|GET|GET /api/engagements/{id}/report[/download|s]`. ReportsTab now
+generates, previews and downloads reports. Verified live: executive + technical reports generated,
+vault file written, download works, audit chain valid, 9 unit tests, production build clean.

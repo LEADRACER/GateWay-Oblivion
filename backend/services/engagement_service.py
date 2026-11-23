@@ -369,12 +369,20 @@ class EngagementService:
     def list_evidence(self, engagement_id: str) -> list:
         return self._list("evidence", engagement_id)
 
-    def add_report(self, engagement_id: str, kind: str, path: str) -> CanonicalReport:
+    def add_report(self, engagement_id: str, kind: str, path: str,
+                   content: str = "") -> CanonicalReport:
         report = CanonicalReport(
-            id=self._id("rep"), engagement_id=engagement_id, kind=kind, path=path
+            id=self._id("rep"), engagement_id=engagement_id,
+            kind=kind, path=path, content=content,
         )
         self._save("report", report)
         return report
+
+    def list_reports(self, engagement_id: str, kind: str | None = None) -> list:
+        rows = self._list("report", engagement_id)
+        if kind:
+            rows = [row for row in rows if row.kind == kind]
+        return rows
 
     # ── guard ────────────────────────────────────────────────────
 

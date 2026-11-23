@@ -146,6 +146,7 @@ class CanonicalReport(BaseModel):
     engagement_id: str
     kind: str = "executive"
     path: str = ""
+    content: str = ""
     generated_at: str = Field(default_factory=_now)
 
 

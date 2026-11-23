@@ -110,6 +110,15 @@ export interface EngagementEvent {
   payload: Record<string, unknown>;
 }
 
+export interface EngagementReport {
+  id: string;
+  engagement_id: string;
+  kind: string;
+  path: string;
+  content: string;
+  generated_at: string;
+}
+
 export interface EngagementMetrics {
   engagement_id: string;
   code: string;
@@ -219,6 +228,24 @@ export function useEngagementMetrics(id: string | null) {
     queryFn: () => api<EngagementMetrics>(`/api/engagements/${id}/metrics`),
     enabled: !!id,
     refetchInterval: 10_000,
+  });
+}
+
+export function useEngagementReport(id: string | null, kind: string) {
+  return useQuery({
+    queryKey: ['engagements', id, 'report', kind],
+    queryFn: () => api<EngagementReport>(`/api/engagements/${id}/report?kind=${kind}`),
+    enabled: !!id,
+    retry: false,
+  });
+}
+
+export function useEngagementReports(id: string | null) {
+  return useQuery({
+    queryKey: ['engagements', id, 'reports'],
+    queryFn: () => api<{ reports: EngagementReport[] }>(`/api/engagements/${id}/reports`)
+      .then((data) => data.reports ?? []),
+    enabled: !!id,
   });
 }
 

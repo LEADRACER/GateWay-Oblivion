@@ -367,3 +367,9 @@ creates a canonical task per step, auto-creates findings from step results, tags
 Pipeline approval now resumes gated runs (bug fixed). *Verified live:* scoped runs complete, gated
 runs halt with `engagement-approval`, approval resumes and creates tasks, engagement metrics/events
 populate, audit chain valid, 6 unit tests passing.
+
+**2026-11-23 — Phase 5 implemented:** `/engagements` frontend with responsive list/detail layout,
+eight tabs (Overview, Scope & RoE, Tasks kanban, Findings with severity chart, Timeline, Evidence,
+Pipelines, Reports), editable scope/RoE, activate/abort controls, approval buttons, and typed hooks
+in `src/hooks/useEngagements.ts`. Engagement progress now refreshes after pipeline task completion.
+Verified: `tsc`, ESLint and production `npm run build` clean.

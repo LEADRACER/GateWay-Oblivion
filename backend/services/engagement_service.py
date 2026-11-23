@@ -488,6 +488,16 @@ class EngagementService:
         findings = self.db.list_entities("finding", engagement_id)
         return min(100.0, sum(weights.get(f.get("severity", "info"), 0) for f in findings))
 
+    def refresh_progress(self, engagement_id: str) -> None:
+        engagement = self.get_engagement(engagement_id)
+        if not engagement:
+            return
+        tasks = self.list_tasks(engagement_id)
+        done = sum(1 for task in tasks if task.status == "done")
+        engagement.progress = round(done / len(tasks) * 100, 1) if tasks else 0.0
+        engagement.updated_at = datetime.now(timezone.utc).isoformat()
+        self._save("engagement", engagement)
+
     def metrics(self, engagement_id: str) -> dict:
         engagement = self.get_engagement(engagement_id)
         if not engagement:

@@ -1426,6 +1426,7 @@ def _pipeline_task_complete(run, step, result):
         engagement_service.update_task(run.engagement_id, step.task_id, {
             "status": "done", "pipeline_run_id": run.id,
         })
+        engagement_service.refresh_progress(run.engagement_id)
         rows = []
         if isinstance(result, dict):
             for key in ("findings", "vulnerabilities"):

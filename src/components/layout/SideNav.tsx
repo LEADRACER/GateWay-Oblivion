@@ -19,6 +19,11 @@ const navItems: NavItem[] = [
     icon: <ChipIcon />,
   },
   {
+    label: 'Engagements',
+    href: '/engagements',
+    icon: <TerminalIcon />,
+  },
+  {
     label: 'Overview',
     href: '/',
     icon: <GridIcon />,
